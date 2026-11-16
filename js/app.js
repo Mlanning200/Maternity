@@ -644,8 +644,23 @@ const actions = {
     await doConnect(document.getElementById('repo').value, document.getElementById('token').value);
   },
   'connect-code': async () => {
-    const parsed = Store.parseSetupCode(document.getElementById('code').value);
-    if (!parsed) { showSetupError('That setup code does not look right. Copy it again from the other phone.'); return; }
+    const raw = document.getElementById('code').value.trim();
+    if (/^(github_pat_|ghp_)/.test(raw)) {
+      // A GitHub token pasted in the wrong box: move it to where it belongs.
+      document.getElementById('token').value = raw;
+      document.getElementById('code').value = '';
+      const repo = document.getElementById('repo');
+      if (!repo.value) repo.value = 'mlanning200/maternity-data';
+      showSetupError('That was a GitHub token, so it was moved to the GitHub section below. Check the repo name and tap Connect there.');
+      return;
+    }
+    const parsed = Store.parseSetupCode(raw);
+    if (!parsed) {
+      showSetupError(raw
+        ? `That setup code does not look right. It should start with MT1: (this starts with "${raw.slice(0, 6)}…"). Copy it again from the other phone, or use the GitHub section below.`
+        : 'Paste the setup code first.');
+      return;
+    }
     await doConnect(parsed.repo, parsed.token);
   },
 };

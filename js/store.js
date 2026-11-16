@@ -253,7 +253,9 @@ export class Store {
     return 'MT1:' + btoa(JSON.stringify({ r: this.cfg.repo, k: this.cfg.token }));
   }
   static parseSetupCode(code) {
-    const m = String(code || '').trim().match(/^MT1:([A-Za-z0-9+/=]+)$/);
+    // Forgive spaces, line breaks and invisible characters added by Messages or copy/paste.
+    const clean = String(code || '').replace(/[\s​-‍﻿ ]/g, '');
+    const m = clean.match(/MT1:([A-Za-z0-9+/=]+)/i);
     if (!m) return null;
     try {
       const o = JSON.parse(atob(m[1]));
