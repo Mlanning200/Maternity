@@ -11,7 +11,7 @@ const $toast = document.getElementById('toast');
 $nav.innerHTML = [['home', 'egg', 'Today'], ['history', 'calendar', 'History'], ['settings', 'settings', 'Settings']]
   .map(([t, i, l]) => `<button data-act="tab" data-tab="${t}">${icons[i]}<span>${l}</span></button>`).join('');
 
-const APP_VERSION = '2.1';
+const APP_VERSION = '2.2';
 const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 
 // ---------- helpers ----------
@@ -64,6 +64,7 @@ function ageLabel(bday) {
 }
 
 const tOf = (e) => (e.type === 'feed' ? e.start : e.at);
+const isRealFeed = (e) => e.type === 'feed' && e.end && !e.attempt;
 const feedDur = (e, now = Date.now()) => e.segs.reduce((sum, s) => sum + ((s.b ?? now) - s.a), 0);
 const lastSide = (e) => e.segs[e.segs.length - 1].s;
 const running = (d) => d.entries.find((e) => e.type === 'feed' && !e.end);
@@ -95,8 +96,8 @@ function row(e, d) {
   let icon, title, meta = '';
   if (e.type === 'feed') {
     const sides = feedSides(e);
-    icon = `<span class="tl-ico egg-ico ${lastSide(e)}">${sides.length > 1 ? sides.join('') : sides[0]}</span>`;
-    title = sides.map(sideName).join(' → ');
+    icon = `<span class="tl-ico egg-ico ${lastSide(e)} ${e.attempt ? 'attempt' : ''}">${sides.length > 1 ? sides.join('') : sides[0]}</span>`;
+    title = (e.attempt ? 'Attempt · ' : '') + sides.map(sideName).join(' → ');
     meta = !e.end ? '<span class="live">Feeding now</span>'
       : e.segs.length > 1 ? `${fmtHM(feedDur(e))} · ${e.segs.map((s) => `${s.s} ${fmtHM((s.b ?? Date.now()) - s.a)}`).join(', ')}` : fmtHM(feedDur(e));
   } else if (e.type === 'bottle') {
@@ -125,18 +126,21 @@ function timeline(list, d, emptyText = 'Nothing yet. Fresh day, fresh eggs.') {
 const ringPct = (ms) => (((ms % (20 * MIN)) / (20 * MIN)) * 100).toFixed(2);
 
 // ---------- rendering ----------
-function syncBadge() {
+function syncBadge(always = false) {
   const s = store.status;
+  if (!always && s !== 'offline' && s !== 'auth') return '';
   const label = { ok: 'Synced', idle: 'Synced', pending: 'Saving', offline: 'Offline', auth: 'Reconnect' }[s];
   return `<button class="sync ${s}" data-act="tab" data-tab="settings" aria-label="Sync: ${label}"><i></i><span>${label}</span></button>`;
 }
+
+const nameSize = (n) => (n.length > 22 ? 'xl-name' : n.length > 13 ? 'long-name' : '');
 
 function header(d, title, sub) {
   const s = d.settings;
   return `<header class="top">
     <div class="avatar ${running(d) ? 'bob' : ''} ${Date.now() < ui.hopUntil ? 'hop' : ''}">${chick(isNight() && !running(d) ? 'sleepy' : 'happy')}</div>
     <div class="who"><div class="eyebrow">${title ? '' : greeting()}</div>
-      <h1>${esc(title || s.babyName || 'Lil Chicken')}</h1>
+      <h1 class="${nameSize(title || s.babyName || 'Lil Chicken')}">${esc(title || s.babyName || 'Lil Chicken')}</h1>
       <div class="sub">${esc(sub ?? ageLabel(s.birthday))}</div></div>
     ${syncBadge()}</header>`;
 }
@@ -180,9 +184,11 @@ function feedCard(d, now) {
         <button class="btn soft ${other(seg.s)}" data-act="switch">Switch to ${sideName(other(seg.s))}</button>
         <button class="btn primary done" data-act="stop">${icons.stop} Done</button>
       </div>
+      <button class="attempt-btn" data-act="stop-attempt">Didn’t really feed? <b>Save as attempt</b></button>
     </section>`;
   }
-  const feeds = d.entries.filter((e) => e.type === 'feed' && e.end).sort((a, b) => b.start - a.start);
+  const feeds = d.entries.filter(isRealFeed).sort((a, b) => b.start - a.start);
+  const lastAttempt = d.entries.filter((e) => e.type === 'feed' && e.attempt).sort((a, b) => b.start - a.start)[0];
   const bottles = d.entries.filter((e) => e.type === 'bottle').sort((a, b) => b.at - a.at);
   const lf = feeds[0], lb = bottles[0];
   const lastAny = Math.max(lf ? lf.start : 0, lb ? lb.at : 0);
@@ -197,7 +203,8 @@ function feedCard(d, now) {
       : `Bottle · ${fmtTime(lb.at)}${lb.oz ? ` · ${esc(lb.oz)} oz` : ''}`;
     since = `<div class="since"><div class="eyebrow">Last feed started</div>
       <div class="big"><span data-ago="${lastAny}">${fmtHM(now - lastAny)}</span><small>ago</small></div>
-      <div class="since-meta">${meta}</div></div>`;
+      <div class="since-meta">${meta}</div>
+      ${lastAttempt && lastAttempt.start > lastAny ? `<div class="since-attempt">Attempt at ${fmtTime(lastAttempt.start)} · ${sideName(lastSide(lastAttempt))}</div>` : ''}</div>`;
   }
   const egg = (s) => `<button class="egg ${s} ${next === s ? 'next' : ''}" data-act="start" data-side="${s}" aria-label="Start feed on ${sideName(s).toLowerCase()} side${next === s ? ' (suggested)' : ''}">
       <span class="sheen"></span>${next === s ? '<span class="next-tag">Start here</span>' : ''}
@@ -266,7 +273,8 @@ function renderHome(d) {
 
 function counts(list) {
   return {
-    feeds: list.filter((e) => e.type === 'feed').length,
+    feeds: list.filter((e) => e.type === 'feed' && !e.attempt).length,
+    attempts: list.filter((e) => e.type === 'feed' && e.attempt).length,
     bottles: list.filter((e) => e.type === 'bottle').length,
     wet: list.filter((e) => e.type === 'diaper' && (e.kind === 'wet' || e.kind === 'both')).length,
     dirty: list.filter((e) => e.type === 'diaper' && (e.kind === 'dirty' || e.kind === 'both')).length,
@@ -275,6 +283,7 @@ function counts(list) {
 function daySummary(list, showDiapers) {
   const c = counts(list);
   const parts = [`${c.feeds} feed${c.feeds === 1 ? '' : 's'}`];
+  if (c.attempts) parts.push(`${c.attempts} attempt${c.attempts === 1 ? '' : 's'}`);
   if (c.bottles) parts.push(`${c.bottles} bottle${c.bottles === 1 ? '' : 's'}`);
   if (showDiapers) parts.push(`${c.wet} wet`, `${c.dirty} dirty`);
   return parts.join(' · ');
@@ -348,7 +357,7 @@ function renderSettings(d) {
   </section>
   <div class="group-label">Sync</div>
   <section class="card form">
-    <p class="sync-text">${syncBadge()} ${statusText}</p>
+    <p class="sync-text">${syncBadge(true)} ${statusText}</p>
     <button class="btn soft full" data-act="copy-setup">${icons.link} Copy setup code</button>
     <p class="hint">Text or AirDrop it, then paste it into Lil Chicken on the other iPhone. Treat it like a password.</p>
     <div class="danger-zone"><button class="btn ghost-danger full" data-act="disconnect">Disconnect this phone</button></div>
@@ -493,10 +502,10 @@ const chipGroup = (group, opts, sel) => `<div class="chips" data-group="${group}
 $sheet.addEventListener('click', (e) => { if (e.target === $sheet) closeSheet(); });
 
 let toastTimer, toastUndo;
-function toast(text, undo) {
+function toast(text, undo, label = 'Undo') {
   clearTimeout(toastTimer);
   toastUndo = undo;
-  $toast.innerHTML = `<span>${esc(text)}</span>${undo ? '<button data-act="undo">Undo</button>' : ''}`;
+  $toast.innerHTML = `<span>${esc(text)}</span>${undo ? `<button data-act="undo">${label}</button>` : ''}`;
   $toast.hidden = false;
   toastTimer = setTimeout(() => { $toast.hidden = true; toastUndo = null; }, 8000);
 }
@@ -508,7 +517,8 @@ function editSheet(e) {
     const sides = feedSides(e).join('');
     const opt = (v, l) => `<option value="${v}" ${sides === v ? 'selected' : ''}>${l}</option>`;
     const knownSides = ['L', 'R', 'LR', 'RL'].includes(sides);
-    fields = `${nudges('f-start')}<label class="field"><span>Started</span><input type="datetime-local" id="f-start" value="${toLocalInput(e.start)}"></label>
+    ui.form = { fkind: e.attempt ? 'attempt' : 'feed' };
+    fields = `${e.end ? `<div class="field"><span>What happened</span>${chipGroup('fkind', [['feed', 'Fed'], ['attempt', 'Attempt only']], ui.form.fkind)}</div>` : ''}${nudges('f-start')}<label class="field"><span>Started</span><input type="datetime-local" id="f-start" value="${toLocalInput(e.start)}"></label>
       ${e.end ? `<label class="field"><span>Length (minutes)</span><input id="f-len" inputmode="numeric" value="${Math.round(feedDur(e) / MIN)}"></label>
       <label class="field"><span>Sides</span><select id="f-sides">${opt('L', 'Left')}${opt('R', 'Right')}${opt('LR', 'Left, then Right')}${opt('RL', 'Right, then Left')}${knownSides ? '' : `<option value="" selected>Several switches (keep)</option>`}</select></label>` : ''}`;
   } else {
@@ -519,7 +529,7 @@ function editSheet(e) {
       fields += `<label class="field"><span>Kind</span><select id="f-kind">${o('wet', 'Wet')}${o('dirty', 'Dirty')}${o('both', 'Wet + dirty')}</select></label>`;
     }
   }
-  const title = { feed: 'Feed', bottle: 'Bottle', diaper: 'Diaper', med: 'Medicine' }[e.type];
+  const title = e.attempt ? 'Feeding attempt' : { feed: 'Feed', bottle: 'Bottle', diaper: 'Diaper', med: 'Medicine' }[e.type];
   openSheet(`<h2>${title}</h2>${fields}
     <div class="actions">
       <button class="btn primary" data-act="save-edit" data-id="${esc(e.id)}">Save</button>
@@ -561,16 +571,22 @@ function messageSheet(m) {
   upd();
 }
 
-function stopFeed(endAt) {
+function stopFeed(endAt, asAttempt = false) {
   const r = running(store.data);
   if (!r) return;
   const segs = r.segs.map((s) => ({ ...s }));
   const last = segs[segs.length - 1];
   last.b = Math.max(last.a, Math.min(endAt, Date.now()));
   const done = { ...r, segs, end: last.b };
+  if (asAttempt) {
+    done.attempt = true;
+    store.put('entries', done);
+    toast('Attempt saved. Try again soon, mama.', () => store.put('entries', r));
+    return;
+  }
   if (feedDur(done) < MIN) {
     store.del('entries', r.id);
-    toast('Feed cancelled', () => store.put('entries', r));
+    toast('Under a minute, not saved', () => store.put('entries', { ...done, attempt: true }), 'Save as attempt');
     return;
   }
   ui.hopUntil = Date.now() + 600;
@@ -616,6 +632,7 @@ const actions = {
     store.put('entries', { ...r, segs });
   },
   stop: () => stopFeed(Date.now()),
+  'stop-attempt': () => stopFeed(Date.now(), true),
   'stop-at': ({ min }) => {
     const r = running(store.data);
     if (r) stopFeed(r.segs[r.segs.length - 1].a + +min * MIN);
@@ -675,10 +692,11 @@ const actions = {
     toast('Bottle logged', () => store.del('entries', e.id));
   },
   'past-feed': () => {
-    const lf = store.data.entries.filter((e) => e.type === 'feed' && e.end).sort((a, b) => b.start - a.start)[0];
+    const lf = store.data.entries.filter(isRealFeed).sort((a, b) => b.start - a.start)[0];
     const side = lf ? nextSide(lf) : 'L';
-    ui.form = { pago: '30', plen: '15', psides: side };
+    ui.form = { pago: '30', plen: '15', psides: side, pkind: 'feed' };
     openSheet(`<h2>Add a past feed</h2>
+      <div class="field"><span>What happened</span>${chipGroup('pkind', [['feed', 'Fed'], ['attempt', 'Attempt only']], 'feed')}</div>
       <div class="field"><span>Started</span>${chipGroup('pago', [['15', '15m ago'], ['30', '30m ago'], ['45', '45m ago'], ['60', '1h ago'], ['120', '2h ago'], ['other', 'Other…']], '30')}</div>
       <label class="field" id="pago-other" hidden><span>Start time</span><input type="datetime-local" id="p-start" value="${toLocalInput(Date.now() - 30 * MIN)}"></label>
       <div class="field"><span>How long</span>${chipGroup('plen', [['5', '5m'], ['10', '10m'], ['15', '15m'], ['20', '20m'], ['30', '30m']], '15')}</div>
@@ -691,7 +709,7 @@ const actions = {
     const len = +f.plen || 15;
     if (!start) return;
     const segs = buildSegs(start, len, f.psides || 'L');
-    store.put('entries', { id: uid(), type: 'feed', start, end: segs[segs.length - 1].b, segs });
+    store.put('entries', { id: uid(), type: 'feed', start, end: segs[segs.length - 1].b, segs, ...(f.pkind === 'attempt' ? { attempt: true } : {}) });
     closeSheet();
     toast('Feed logged');
   },
@@ -704,6 +722,7 @@ const actions = {
     if (!e) return closeSheet();
     const n = structuredClone(e);
     if (e.type === 'feed') {
+      if (e.end) { if (ui.form.fkind === 'attempt') n.attempt = true; else delete n.attempt; }
       const start = fromLocalInput(document.getElementById('f-start').value);
       if (start) {
         const shift = start - e.start;

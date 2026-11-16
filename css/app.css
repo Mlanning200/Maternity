@@ -121,7 +121,9 @@ main { max-width: 560px; margin: 0 auto; padding: calc(10px + env(safe-area-inse
 .who { flex: 1; min-width: 0; }
 .eyebrow { font-size: 13px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .eyebrow:empty { display: none; }
-.top h1 { margin: 0; font-size: 30px; line-height: 1.05; font-weight: 900; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.top h1 { margin: 0; font-size: 30px; line-height: 1.08; font-weight: 900; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.top h1.long-name { font-size: 25px; }
+.top h1.xl-name { font-size: 21px; }
 .top .sub { color: var(--muted); font-size: 15px; font-weight: 600; margin-top: 2px; }
 .sync {
   display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 800; color: var(--muted);
@@ -149,6 +151,10 @@ main { max-width: 560px; margin: 0 auto; padding: calc(10px + env(safe-area-inse
 .since .big { font-size: 58px; font-weight: 900; letter-spacing: -.04em; line-height: 1; margin: 6px 0 10px; }
 .since .big small { font-size: 20px; font-weight: 800; letter-spacing: 0; color: var(--muted); margin-left: 6px; }
 .since-meta { color: var(--muted); font-size: 15px; font-weight: 700; }
+.since-attempt { display: inline-block; margin-top: 8px; font-size: 13px; font-weight: 800; color: var(--muted); background: var(--sunk); border-radius: 99px; padding: 4px 12px; }
+.attempt-btn { display: block; width: 100%; min-height: 44px; margin-top: 10px; font-size: 15px; font-weight: 700; color: var(--muted); }
+.attempt-btn b { color: var(--text); font-weight: 900; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+.egg-ico.attempt { background: transparent !important; border: 2px dashed currentColor; }
 .since-empty { font-size: 20px; font-weight: 800; margin-top: 6px; }
 .chip { font-size: 13px; font-weight: 900; padding: 4px 10px; border-radius: 99px; background: var(--sunk); color: var(--text); }
 .chip.L { background: var(--left-soft); color: var(--left); }
