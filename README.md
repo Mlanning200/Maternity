@@ -12,7 +12,7 @@ Your entries live in a separate *private* repo (`maternity-data`) that only your
 1. In this repo: **Settings → General → Danger Zone → Change visibility → Public**.
 2. **Settings → Pages**. Under *Build and deployment*, set Source to **Deploy from a branch**,
    choose the branch with the app code (e.g. `main`), folder **/ (root)**, and click **Save**.
-3. After a minute the app is at `https://<your-username>.github.io/maternity/`.
+3. After a minute the app is at https://mlanning200.github.io/Maternity/ (the capital M matters).
 
 ### 2. Make the private data repo
 1. Go to <https://github.com/new>.
