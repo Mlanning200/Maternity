@@ -1,7 +1,7 @@
 // Artwork for Lil Chicken: an original chick character and a small icon set.
 // Everything is inline SVG, so it is crisp at any size and themes with CSS variables.
 
-/** The Lil Chicken mascot. mood: 'happy' | 'sleepy' */
+/** The Lil Chicken mascot (a girl, with her bow). mood: 'happy' | 'sleepy' */
 export function chick(mood = 'happy', cls = '') {
   const eyes = mood === 'sleepy'
     ? `<path d="M41 57q5 4 10 0M69 57q5 4 10 0" stroke="#3B2614" stroke-width="3.2" fill="none" stroke-linecap="round"/>`
@@ -17,6 +17,12 @@ export function chick(mood = 'happy', cls = '') {
     <path d="M98 70c6-1 10 4 9 10-5 3-13 2-16-4" fill="var(--yolk-deep)"/>
     <ellipse cx="38" cy="68" rx="7" ry="4.5" fill="var(--cheek)" opacity=".7"/>
     <ellipse cx="82" cy="68" rx="7" ry="4.5" fill="var(--cheek)" opacity=".7"/>
+    <g transform="rotate(18 86 36)">
+      <path d="M86 36c-5-7-15-9-16-2s9 8 16 2z" fill="var(--bow)"/>
+      <path d="M86 36c5-7 15-9 16-2s-9 8-16 2z" fill="var(--bow)"/>
+      <path d="M78 33c2 1 4 2 5 3M94 33c-2 1-4 2-5 3" stroke="var(--bow-deep)" stroke-width="1.4" stroke-linecap="round" fill="none"/>
+      <circle cx="86" cy="36" r="3.6" fill="var(--bow-deep)"/>
+    </g>
     ${eyes}
     <path d="M53 64h14c1 0 1.6 1 1 1.8L61.2 73a1.5 1.5 0 0 1-2.4 0L52 65.8c-.6-.8 0-1.8 1-1.8z" fill="var(--beak)"/>
   </svg>`;
