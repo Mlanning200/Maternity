@@ -11,7 +11,7 @@ const $toast = document.getElementById('toast');
 $nav.innerHTML = [['home', 'egg', 'Today'], ['history', 'calendar', 'History'], ['settings', 'settings', 'Settings']]
   .map(([t, i, l]) => `<button data-act="tab" data-tab="${t}">${icons[i]}<span>${l}</span></button>`).join('');
 
-const APP_VERSION = '2.2';
+const APP_VERSION = '2.3';
 const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 
 // ---------- helpers ----------
@@ -502,12 +502,15 @@ const chipGroup = (group, opts, sel) => `<div class="chips" data-group="${group}
 $sheet.addEventListener('click', (e) => { if (e.target === $sheet) closeSheet(); });
 
 let toastTimer, toastUndo;
+function hideToast() { clearTimeout(toastTimer); $toast.hidden = true; toastUndo = null; }
+// Tap the message itself (not Undo) to dismiss it right away.
+$toast.addEventListener('click', (e) => { if (!e.target.closest('[data-act]')) hideToast(); });
 function toast(text, undo, label = 'Undo') {
   clearTimeout(toastTimer);
   toastUndo = undo;
   $toast.innerHTML = `<span>${esc(text)}</span>${undo ? `<button data-act="undo">${label}</button>` : ''}`;
   $toast.hidden = false;
-  toastTimer = setTimeout(() => { $toast.hidden = true; toastUndo = null; }, 8000);
+  toastTimer = setTimeout(hideToast, 4000);
 }
 
 function editSheet(e) {
