@@ -8,6 +8,7 @@ const $nav = document.getElementById('nav');
 const $sheet = document.getElementById('sheet');
 const $toast = document.getElementById('toast');
 
+const APP_VERSION = '1.2';
 const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 
 // ---------- helpers ----------
@@ -277,7 +278,7 @@ function renderSettings(d) {
     <p class="hint">Text or AirDrop it, then paste it in the app on the other iPhone. Treat it like a password.</p>
     <div class="actions" style="margin-top:12px"><button class="btn danger full" data-act="disconnect">Disconnect this phone</button></div>
   </section>
-  <p class="fine">${esc(NIV_NOTICE)}</p>`;
+  <p class="fine">${esc(NIV_NOTICE)}<br><br>App version ${APP_VERSION}</p>`;
 }
 
 function renderMessages(d) {
@@ -728,6 +729,25 @@ setInterval(() => { if (!document.hidden) store.pull(); }, 15000);
 render();
 store.pull();
 
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+// Updates: check for a new version every time the app comes to the front, and when one
+// takes over, reload so it is used right away (waiting if she is typing).
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloadWanted = false;
+  const reloadIfIdle = () => {
+    const a = document.activeElement;
+    if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.type !== 'checkbox') return;
+    if ($sheet.hidden === false) return;
+    location.reload();
+  };
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloadWanted) return;
+    reloadWanted = true;
+    reloadIfIdle();
+  });
+  document.addEventListener('focusout', () => { if (reloadWanted) setTimeout(reloadIfIdle, 300); });
+  document.addEventListener('click', () => { if (reloadWanted) setTimeout(reloadIfIdle, 300); });
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+  }).catch(() => {});
 }
