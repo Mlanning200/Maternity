@@ -3,7 +3,7 @@ import { VERSES, NIV_NOTICE } from './verses.js';
 import { chick, icons } from './art.js';
 
 const store = new Store();
-const ui = { tab: 'home', msgUnlocked: false, histDays: 14, pendingRender: false, setupError: '' };
+const ui = { tab: 'home', msgUnlocked: false, histDays: 14, pendingRender: false, setupError: '', form: {}, rescueOff: {}, hopUntil: 0, confirmFn: null };
 const $app = document.getElementById('app');
 const $nav = document.getElementById('nav');
 const $sheet = document.getElementById('sheet');
@@ -11,7 +11,7 @@ const $toast = document.getElementById('toast');
 $nav.innerHTML = [['home', 'egg', 'Today'], ['history', 'calendar', 'History'], ['settings', 'settings', 'Settings']]
   .map(([t, i, l]) => `<button data-act="tab" data-tab="${t}">${icons[i]}<span>${l}</span></button>`).join('');
 
-const APP_VERSION = '2.0';
+const APP_VERSION = '2.1';
 const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 
 // ---------- helpers ----------
@@ -68,13 +68,23 @@ const feedDur = (e, now = Date.now()) => e.segs.reduce((sum, s) => sum + ((s.b ?
 const lastSide = (e) => e.segs[e.segs.length - 1].s;
 const running = (d) => d.entries.find((e) => e.type === 'feed' && !e.end);
 const sorted = (d) => [...d.entries].sort((a, b) => tOf(b) - tOf(a));
+/** Which side to offer next. One side last time: the other one. Both sides: the one that got
+ * less time (it is likely fuller); if they were about even, the side she finished on. */
+function nextSide(f) {
+  const t = { L: 0, R: 0 };
+  f.segs.forEach((s) => { t[s.s] += (s.b ?? Date.now()) - s.a; });
+  if (!t.L || !t.R) return other(lastSide(f));
+  if (Math.abs(t.L - t.R) < 2 * MIN) return lastSide(f);
+  return t.L < t.R ? 'L' : 'R';
+}
 const feedSides = (e) => e.segs.map((s) => s.s).filter((s, i, a) => i === 0 || a[i - 1] !== s);
 
 const KIND = { wet: 'Wet diaper', dirty: 'Dirty diaper', both: 'Wet + dirty' };
 
+const isNight = (now = new Date()) => { const h = now.getHours() + now.getMinutes() / 60; return h >= 21 || h < 6.5; };
 function greeting(now = new Date()) {
   const h = now.getHours();
-  if (h < 5 || h >= 22) return 'Night shift';
+  if (h < 5 || h >= 22) return 'Night shift, mama';
   if (h < 12) return 'Good morning';
   if (h < 17) return 'Good afternoon';
   return 'Good evening';
@@ -87,7 +97,8 @@ function row(e, d) {
     const sides = feedSides(e);
     icon = `<span class="tl-ico egg-ico ${lastSide(e)}">${sides.length > 1 ? sides.join('') : sides[0]}</span>`;
     title = sides.map(sideName).join(' → ');
-    meta = e.end ? `${fmtHM(feedDur(e))} · ${e.segs.map((s) => `${s.s} ${fmtHM((s.b ?? Date.now()) - s.a)}`).join(', ')}` : '<span class="live">Feeding now</span>';
+    meta = !e.end ? '<span class="live">Feeding now</span>'
+      : e.segs.length > 1 ? `${fmtHM(feedDur(e))} · ${e.segs.map((s) => `${s.s} ${fmtHM((s.b ?? Date.now()) - s.a)}`).join(', ')}` : fmtHM(feedDur(e));
   } else if (e.type === 'bottle') {
     icon = `<span class="tl-ico bottle">${icons.bottle}</span>`;
     title = 'Bottle';
@@ -105,13 +116,13 @@ function row(e, d) {
     <span class="tl-time">${fmtTime(tOf(e))}</span></button></li>`;
 }
 
-function timeline(list, d, emptyText = 'Nothing logged yet today') {
+function timeline(list, d, emptyText = 'Nothing yet. Fresh day, fresh eggs.') {
   if (!list.length) return `<div class="empty">${chick('sleepy', 'empty-chick')}<p>${emptyText}</p></div>`;
   return `<ul class="timeline">${list.map((e) => row(e, d)).join('')}</ul>`;
 }
 
 // The ring fills over 20 minutes on the current side.
-const ringPct = (ms) => Math.min(100, (ms / (20 * MIN)) * 100).toFixed(2);
+const ringPct = (ms) => (((ms % (20 * MIN)) / (20 * MIN)) * 100).toFixed(2);
 
 // ---------- rendering ----------
 function syncBadge() {
@@ -123,7 +134,7 @@ function syncBadge() {
 function header(d, title, sub) {
   const s = d.settings;
   return `<header class="top">
-    <div class="avatar">${chick()}</div>
+    <div class="avatar ${running(d) ? 'bob' : ''} ${Date.now() < ui.hopUntil ? 'hop' : ''}">${chick(isNight() && !running(d) ? 'sleepy' : 'happy')}</div>
     <div class="who"><div class="eyebrow">${title ? '' : greeting()}</div>
       <h1>${esc(title || s.babyName || 'Lil Chicken')}</h1>
       <div class="sub">${esc(sub ?? ageLabel(s.birthday))}</div></div>
@@ -140,8 +151,9 @@ function todaysNote(d) {
   const earlier = day ? d.messages.some((m) => +m.day < day) : false;
   let h = '<section class="note"><div class="gingham"></div><div class="note-body">';
   if (msgs.length) {
-    h += `<div class="note-label">${icons.heart} A note for you</div>`;
+    h += `<div class="note-label">${icons.heart} A note for you <span class="new-pill">New today</span></div>`;
     for (const m of msgs) h += `<p class="msg">${esc(m.text)}</p>`;
+    h += `<div class="sign">— ${s.signOff ? `love, ${esc(s.signOff)}` : 'with love'}</div>`;
   }
   if (s.showVerses) {
     h += `<div class="verse-wrap ${msgs.length ? 'split' : ''}"><div class="note-label">${icons.book} Verse for today</div>
@@ -156,14 +168,17 @@ function feedCard(d, now) {
   if (r) {
     const seg = r.segs[r.segs.length - 1];
     return `<section class="card running ${seg.s}">
-      <div class="run-top"><span class="run-dot"></span>Feeding on the ${sideName(seg.s).toLowerCase()}</div>
+      <div class="run-top"><span class="run-dot"></span>${sideName(seg.s)} side</div>
       <div class="ring" data-ring="${seg.a}" style="--p:${ringPct(now - seg.a)}%"><div class="ring-inner">
         <div class="clock" data-clock="${seg.a}">${fmtClock(now - seg.a)}</div>
         <div class="run-total">total <span data-feedtotal="${r.id}">${fmtHM(feedDur(r, now))}</span> · since ${fmtTime(r.start)}</div>
       </div></div>
+      ${now - seg.a > 45 * MIN && !ui.rescueOff[r.id] ? `<div class="rescue"><b>Still feeding? Dozed off?</b><span>How long did it really last on this side?</span>
+        <div class="chips">${[15, 20, 30].map((m) => `<button data-act="stop-at" data-min="${m}">${m} min</button>`).join('')}
+        <button data-act="still-going" data-id="${r.id}">She’s still feeding</button></div></div>` : ''}
       <div class="run-actions">
         <button class="btn soft ${other(seg.s)}" data-act="switch">Switch to ${sideName(other(seg.s))}</button>
-        <button class="btn primary" data-act="stop">${icons.stop} Done</button>
+        <button class="btn primary done" data-act="stop">${icons.stop} Done</button>
       </div>
     </section>`;
   }
@@ -171,25 +186,25 @@ function feedCard(d, now) {
   const bottles = d.entries.filter((e) => e.type === 'bottle').sort((a, b) => b.at - a.at);
   const lf = feeds[0], lb = bottles[0];
   const lastAny = Math.max(lf ? lf.start : 0, lb ? lb.at : 0);
-  const next = lf ? other(lastSide(lf)) : null;
+  const next = lf ? nextSide(lf) : null;
   let since;
   if (!lastAny) {
-    since = `<div class="since"><div class="eyebrow">Ready when you are</div><div class="since-empty">Tap a side to start the first feed</div></div>`;
+    since = `<div class="since"><div class="eyebrow">Ready when you are</div><div class="since-empty">Tap an egg to start</div></div>`;
   } else {
     const isFeed = lf && lf.start === lastAny;
     const meta = isFeed
-      ? `<span class="chip ${lastSide(lf)}">Ended ${sideName(lastSide(lf))}</span><span>${fmtTime(lf.start)} · ${fmtHM(feedDur(lf))}</span>`
-      : `<span class="chip">Bottle</span><span>${fmtTime(lb.at)}${lb.oz ? ` · ${esc(lb.oz)} oz` : ''}</span>`;
+      ? `${feedSides(lf).map(sideName).join(' → ')} · ${fmtTime(lf.start)} · ${fmtHM(feedDur(lf))}`
+      : `Bottle · ${fmtTime(lb.at)}${lb.oz ? ` · ${esc(lb.oz)} oz` : ''}`;
     since = `<div class="since"><div class="eyebrow">Last feed started</div>
       <div class="big"><span data-ago="${lastAny}">${fmtHM(now - lastAny)}</span><small>ago</small></div>
       <div class="since-meta">${meta}</div></div>`;
   }
-  const egg = (s) => `<button class="egg ${s} ${next === s ? 'next' : ''}" data-act="start" data-side="${s}">
-      ${next === s ? '<span class="next-tag">Next</span>' : ''}
+  const egg = (s) => `<button class="egg ${s} ${next === s ? 'next' : ''}" data-act="start" data-side="${s}" aria-label="Start feed on ${sideName(s).toLowerCase()} side${next === s ? ' (suggested)' : ''}">
+      <span class="sheen"></span>${next === s ? '<span class="next-tag">Start here</span>' : ''}
       <span class="egg-letter">${s}</span><span class="egg-name">${sideName(s)}</span></button>`;
   return `<section class="card hero">
     ${since}
-    <div class="eggs">${egg('L')}${egg('R')}</div>
+    <div class="eggs ${next ? 'has-next' : ''}">${egg('L')}${egg('R')}</div>
     <div class="quick">
       <button data-act="bottle">${icons.bottle}<span>Bottle</span></button>
       <button data-act="past-feed">${icons.clock}<span>Add past feed</span></button>
@@ -202,7 +217,7 @@ function diaperCard(d, now) {
   const wet = today.filter((e) => e.kind === 'wet' || e.kind === 'both').length;
   const dirty = today.filter((e) => e.kind === 'dirty' || e.kind === 'both').length;
   return `<section class="card">
-    <div class="card-head"><h2>Diapers</h2><span class="stat"><b>${wet}</b> wet · <b>${dirty}</b> dirty today</span></div>
+    <div class="card-head"><h2>Diapers</h2><span class="stat">Today <b>${wet}</b> wet · <b>${dirty}</b> dirty</span></div>
     <div class="tiles">
       <button class="tile wet" data-act="diaper" data-kind="wet">${icons.drop}<span>Wet</span></button>
       <button class="tile dirty" data-act="diaper" data-kind="dirty">${icons.dirty}<span>Dirty</span></button>
@@ -222,14 +237,14 @@ function medsCard(d, now) {
   for (const med of d.settings.meds) {
     const st = medStatus(d, med, now);
     const when = st.ready
-      ? `<span class="ok">OK to take now</span>${st.last ? ` · last at ${fmtTime(st.last.at)}` : ''}`
-      : `Next <b>${fmtTime(st.readyAt)}</b> · in <span data-countdown="${st.readyAt}">${fmtHM(st.readyAt - now + MIN - 1)}</span>`;
+      ? `<span class="ok">OK to take now</span>${st.last ? ` · last ${fmtTime(st.last.at)}` : ''}`
+      : `Took at <b>${fmtTime(st.last.at)}</b><br>Next ${fmtTime(st.readyAt)} · <span data-countdown="${st.readyAt}">${fmtHM(st.readyAt - now + MIN - 1)}</span>`;
     const pct = st.ready || !st.last ? 100 : Math.min(100, Math.max(0, ((now - st.last.at) / (st.readyAt - st.last.at)) * 100));
     h += `<div class="med ${st.ready ? 'ready' : ''}">
       <span class="med-ico">${icons.pill}</span>
       <div class="med-info"><div class="med-name">${esc(med.name || 'Medicine')}</div><div class="med-when">${when}</div>
         <div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div></div>
-      <button class="med-btn" data-act="med" data-id="${esc(med.id)}">Took it</button></div>`;
+      <button class="med-btn" data-act="med" data-id="${esc(med.id)}" aria-label="Took ${esc(med.name)}">${st.ready ? 'Took it' : 'Log dose'}</button></div>`;
   }
   return h + '</section>';
 }
@@ -242,8 +257,9 @@ function todayList(d, now) {
 function renderHome(d) {
   const now = Date.now();
   const s = d.settings;
-  return header(d) + feedCard(d, now) + todaysNote(d)
+  return header(d) + feedCard(d, now)
     + (s.showDiapers ? diaperCard(d, now) : '')
+    + todaysNote(d)
     + (s.showMeds && s.meds.length ? medsCard(d, now) : '')
     + todayList(d, now);
 }
@@ -281,8 +297,9 @@ function renderHistory(d) {
     const n = babyDay(d.settings.birthday, k);
     const title = k === startOfDay(Date.now()) ? 'Today' : k === startOfDay(Date.now() - DAY) ? 'Yesterday' : fmtDate(k);
     const stat = (v, l, cls) => `<div class="mini ${cls}"><b>${v}</b><span>${l}</span></div>`;
-    h += `<section class="card"><div class="card-head"><h2>${title}</h2><span class="stat">${n && n > 0 ? `Day ${n}` : ''}</span></div>
-      <div class="minis">${stat(c.feeds, c.feeds === 1 ? 'feed' : 'feeds', 'f')}${c.bottles ? stat(c.bottles, c.bottles === 1 ? 'bottle' : 'bottles', 'b') : ''}${d.settings.showDiapers ? stat(c.wet, 'wet', 'w') + stat(c.dirty, 'dirty', 'd') : ''}</div>
+    const dateTxt = title === 'Today' || title === 'Yesterday' ? new Date(k).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) : '';
+    h += `<section class="card"><div class="card-head"><h2>${title}</h2><span class="stat">${[dateTxt, n && n > 0 ? `Day ${n}` : ''].filter(Boolean).join(' · ')}</span></div>
+      <div class="minis ${d.settings.showDiapers ? '' : 'two'}">${stat(c.feeds, c.feeds === 1 ? 'feed' : 'feeds', 'f')}${stat(c.bottles || '–', c.bottles === 1 ? 'bottle' : 'bottles', 'b')}${d.settings.showDiapers ? stat(c.wet, 'wet', 'w') + stat(c.dirty, 'dirty', 'd') : ''}</div>
       ${timeline(list, d)}</section>`;
   }
   if (keys.length > ui.histDays) h += `<button class="btn soft full" data-act="more-history">Show earlier days</button>`;
@@ -297,7 +314,7 @@ function renderSettings(d) {
     pending: 'Saving changes…', offline: 'Offline. Changes are kept on this phone and sync when you are back online.',
     auth: 'GitHub stopped accepting the access token (it may have expired). Disconnect, then connect again with a new token.',
   }[store.status];
-  return `${header(d, 'Settings', 'Shared between both phones')}
+  return `${header(d, 'Settings', 'Shared on both phones')}
   <div class="group-label">Baby</div>
   <section class="card form">
     <label class="field"><span>Name</span><input data-set="babyName" value="${esc(s.babyName)}" autocomplete="off" autocapitalize="words" placeholder="Baby's name"></label>
@@ -321,14 +338,20 @@ function renderSettings(d) {
   </section>
   <div class="group-label">Notes for her</div>
   <section class="card list-card">
-    <button class="row" data-act="tab" data-tab="messages"><span class="row-ico">${icons.heart}</span><span class="row-label">Write notes ahead of time<small>${d.messages.length} written${s.msgPin ? ' · locked with PIN' : ''}</small></span>${icons.chevron}</button>
+    <button class="row" data-act="tab" data-tab="messages"><span class="row-ico">${icons.heart}</span><span class="row-label">Write notes ahead of time<small>${ui.msgUnlocked ? `${d.messages.length} written${s.msgPin ? ' · locked with PIN' : ''}` : 'A little something each day'}</small></span>${icons.chevron}</button>
+  </section>
+  <div class="group-label">This phone</div>
+  <section class="card form">
+    <div class="seg-label">Appearance</div>
+    <div class="seg">${[['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => `<button data-act="theme" data-val="${v}" class="${themePref() === v ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <p class="hint">Auto goes dark from 9 pm to 6:30 am, and whenever the iPhone is in dark mode.</p>
   </section>
   <div class="group-label">Sync</div>
   <section class="card form">
     <p class="sync-text">${syncBadge()} ${statusText}</p>
-    <button class="btn soft full" data-act="copy-setup">${icons.link} Copy setup code for the other phone</button>
+    <button class="btn soft full" data-act="copy-setup">${icons.link} Copy setup code</button>
     <p class="hint">Text or AirDrop it, then paste it into Lil Chicken on the other iPhone. Treat it like a password.</p>
-    <button class="btn ghost-danger full" data-act="disconnect">Disconnect this phone</button>
+    <div class="danger-zone"><button class="btn ghost-danger full" data-act="disconnect">Disconnect this phone</button></div>
   </section>
   <div class="colophon">${chick('sleepy')}<p>Lil Chicken · version ${APP_VERSION}</p><p class="fine">${esc(NIV_NOTICE)}</p></div>`;
 }
@@ -358,6 +381,8 @@ function renderMessages(d) {
         <span class="row-label">${esc(m.text)}<small>${{ shown: 'Already shown', today: 'Showing today', upcoming: 'Coming up' }[state]}</small></span>${icons.chevron}</button>`;
     }).join('') + '</section>';
   }
+  h += `<div class="group-label">Signed</div><section class="card form">
+    <label class="field"><span>Sign notes as</span><input data-set="signOff" value="${esc(s.signOff || '')}" autocomplete="off" autocapitalize="words" placeholder="Your name (shows as “— love, …”)"></label></section>`;
   h += `<div class="group-label">Keep them a surprise</div><section class="card form">
     <p class="hint" style="margin-top:0">${s.msgPin ? 'This page is locked with a PIN.' : 'Add a PIN so this page stays locked on her phone.'}</p>
     <div class="pin-row"><input id="newpin" class="inp" inputmode="numeric" autocomplete="off" placeholder="${s.msgPin ? 'New PIN' : '4 digits'}">
@@ -415,8 +440,11 @@ function tick() {
     const e = d.entries.find((x) => x.id === el.dataset.feedtotal);
     if (e) el.textContent = fmtHM(feedDur(e, now));
   });
+  applyTheme();
   if (ui.tab === 'home') {
-    const readyKey = d.settings.meds.map((m) => medStatus(d, m, now).ready).join();
+    const r = running(d);
+    const readyKey = d.settings.meds.map((m) => medStatus(d, m, now).ready).join()
+      + (r ? now - r.segs[r.segs.length - 1].a > 45 * MIN : '') + isNight();
     if (lastMedReady !== null && readyKey !== lastMedReady) render();
     lastMedReady = readyKey;
   }
@@ -424,10 +452,44 @@ function tick() {
 
 // ---------- sheets & toast ----------
 function openSheet(html) {
-  $sheet.innerHTML = `<div class="sheet" role="dialog"><div class="grabber"></div>${html}</div>`;
+  $sheet.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"><div class="grabber"></div>${html.replace('<h2>', '<h2 id="sheet-title">')}</div>`;
   $sheet.hidden = false;
+  document.body.classList.add('locked');
 }
-function closeSheet() { $sheet.hidden = true; $sheet.innerHTML = ''; }
+function closeSheet() { $sheet.hidden = true; $sheet.innerHTML = ''; ui.form = {}; ui.confirmFn = null; document.body.classList.remove('locked'); }
+
+// Swipe the sheet down to close it.
+let drag = null;
+$sheet.addEventListener('touchstart', (e) => {
+  const sh = $sheet.querySelector('.sheet');
+  if (!sh || sh.scrollTop > 0) return;
+  drag = { y: e.touches[0].clientY, dy: 0, sh };
+}, { passive: true });
+$sheet.addEventListener('touchmove', (e) => {
+  if (!drag) return;
+  drag.dy = Math.max(0, e.touches[0].clientY - drag.y);
+  drag.sh.style.transition = 'none';
+  drag.sh.style.transform = `translateY(${drag.dy}px)`;
+}, { passive: true });
+$sheet.addEventListener('touchend', () => {
+  if (!drag) return;
+  const { sh, dy } = drag;
+  drag = null;
+  sh.style.transition = 'transform .2s ease-out';
+  if (dy > 90) { sh.style.transform = 'translateY(100%)'; setTimeout(closeSheet, 180); } else sh.style.transform = '';
+});
+
+/** A themed replacement for confirm(). */
+function confirmSheet({ title, body, ok, cancel = 'Cancel', danger = false, okFirst = false }, fn) {
+  ui.confirmFn = fn;
+  const okBtn = `<button class="btn ${danger ? 'ghost-danger' : okFirst ? 'primary' : 'soft'}" data-act="confirm-ok">${ok}</button>`;
+  const cancelBtn = `<button class="btn ${okFirst || danger ? 'soft' : 'primary'}" data-act="close">${cancel}</button>`;
+  openSheet(`<h2>${title}</h2><p class="sheet-body">${body}</p><div class="actions">${okFirst || danger ? okBtn + cancelBtn : cancelBtn + okBtn}</div>`);
+}
+
+/** Chip group helpers for quick-pick sheets. */
+const chipGroup = (group, opts, sel) => `<div class="chips" data-group="${group}">${opts.map(([v, l]) =>
+  `<button data-act="pick" data-group="${group}" data-val="${v}" class="${String(sel) === String(v) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
 $sheet.addEventListener('click', (e) => { if (e.target === $sheet) closeSheet(); });
 
 let toastTimer, toastUndo;
@@ -436,7 +498,7 @@ function toast(text, undo) {
   toastUndo = undo;
   $toast.innerHTML = `<span>${esc(text)}</span>${undo ? '<button data-act="undo">Undo</button>' : ''}`;
   $toast.hidden = false;
-  toastTimer = setTimeout(() => { $toast.hidden = true; toastUndo = null; }, 5000);
+  toastTimer = setTimeout(() => { $toast.hidden = true; toastUndo = null; }, 8000);
 }
 
 function editSheet(e) {
@@ -446,11 +508,11 @@ function editSheet(e) {
     const sides = feedSides(e).join('');
     const opt = (v, l) => `<option value="${v}" ${sides === v ? 'selected' : ''}>${l}</option>`;
     const knownSides = ['L', 'R', 'LR', 'RL'].includes(sides);
-    fields = `<label class="field"><span>Started</span><input type="datetime-local" id="f-start" value="${toLocalInput(e.start)}"></label>
+    fields = `${nudges('f-start')}<label class="field"><span>Started</span><input type="datetime-local" id="f-start" value="${toLocalInput(e.start)}"></label>
       ${e.end ? `<label class="field"><span>Length (minutes)</span><input id="f-len" inputmode="numeric" value="${Math.round(feedDur(e) / MIN)}"></label>
       <label class="field"><span>Sides</span><select id="f-sides">${opt('L', 'Left')}${opt('R', 'Right')}${opt('LR', 'Left, then Right')}${opt('RL', 'Right, then Left')}${knownSides ? '' : `<option value="" selected>Several switches (keep)</option>`}</select></label>` : ''}`;
   } else {
-    fields = `<label class="field"><span>Time</span><input type="datetime-local" id="f-at" value="${toLocalInput(e.at)}"></label>`;
+    fields = `${nudges('f-at')}<label class="field"><span>Time</span><input type="datetime-local" id="f-at" value="${toLocalInput(e.at)}"></label>`;
     if (e.type === 'bottle') fields += `<label class="field"><span>Ounces</span><input id="f-oz" inputmode="decimal" value="${esc(e.oz || '')}"></label>`;
     if (e.type === 'diaper') {
       const o = (v, l) => `<option value="${v}" ${e.kind === v ? 'selected' : ''}>${l}</option>`;
@@ -461,10 +523,13 @@ function editSheet(e) {
   openSheet(`<h2>${title}</h2>${fields}
     <div class="actions">
       <button class="btn primary" data-act="save-edit" data-id="${esc(e.id)}">Save</button>
-      <button class="btn danger" data-act="delete-entry" data-id="${esc(e.id)}">Delete</button>
-      <button class="btn" data-act="close">Cancel</button>
+      <button class="btn soft" data-act="close">Cancel</button>
+      <button class="btn ghost-danger" data-act="delete-entry" data-id="${esc(e.id)}">Delete</button>
     </div>`);
 }
+
+const nudges = (target) => `<div class="field"><span>Move time</span><div class="chips tight">${[-30, -15, -5, 5].map((m) =>
+  `<button data-act="nudge" data-target="${target}" data-min="${m}">${m > 0 ? '+' : '−'}${Math.abs(m)}m</button>`).join('')}</div></div>`;
 
 function buildSegs(start, lenMin, sides) {
   const len = Math.max(1, lenMin) * MIN;
@@ -484,8 +549,8 @@ function messageSheet(m) {
     <p class="hint" id="m-date"></p>
     <div class="actions">
       <button class="btn primary" data-act="msg-save" data-id="${m ? esc(m.id) : ''}">Save</button>
-      ${m ? `<button class="btn danger" data-act="msg-del" data-id="${esc(m.id)}">Delete</button>` : ''}
-      <button class="btn" data-act="close">Cancel</button>
+      <button class="btn soft" data-act="close">Cancel</button>
+      ${m ? `<button class="btn ghost-danger" data-act="msg-del" data-id="${esc(m.id)}">Delete note</button>` : ''}
     </div>`);
   const upd = () => {
     const n = parseInt(document.getElementById('m-day').value, 10);
@@ -496,6 +561,37 @@ function messageSheet(m) {
   upd();
 }
 
+function stopFeed(endAt) {
+  const r = running(store.data);
+  if (!r) return;
+  const segs = r.segs.map((s) => ({ ...s }));
+  const last = segs[segs.length - 1];
+  last.b = Math.max(last.a, Math.min(endAt, Date.now()));
+  const done = { ...r, segs, end: last.b };
+  if (feedDur(done) < MIN) {
+    store.del('entries', r.id);
+    toast('Feed cancelled', () => store.put('entries', r));
+    return;
+  }
+  ui.hopUntil = Date.now() + 600;
+  store.put('entries', done);
+  toast(`Feed saved · ${fmtHM(feedDur(done))}. Nice work, mama.`, () => store.put('entries', r));
+}
+
+// ---------- theme (per phone) ----------
+function themePref() { try { return localStorage.getItem('mt.theme') || 'auto'; } catch { return 'auto'; } }
+function applyTheme() {
+  const pref = themePref();
+  const dark = pref === 'dark' || (pref === 'auto' && (matchMedia('(prefers-color-scheme: dark)').matches || isNight()));
+  const t = dark ? 'dark' : 'light';
+  if (document.documentElement.dataset.theme !== t) {
+    document.documentElement.dataset.theme = t;
+    document.querySelectorAll('meta[name=theme-color]').forEach((m) => { m.content = dark ? '#17120D' : '#FFF8EB'; m.removeAttribute('media'); });
+  }
+}
+applyTheme();
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
+
 // ---------- actions ----------
 const actions = {
   tab: ({ tab }) => { ui.tab = tab; closeSheet(); render(); window.scrollTo(0, 0); },
@@ -505,7 +601,9 @@ const actions = {
   start: ({ side }) => {
     if (running(store.data)) return;
     const now = Date.now();
-    store.put('entries', { id: uid(), type: 'feed', start: now, end: null, segs: [{ s: side, a: now, b: null }] });
+    const id = uid();
+    store.put('entries', { id, type: 'feed', start: now, end: null, segs: [{ s: side, a: now, b: null }] });
+    toast(`${sideName(side)} side started`, () => store.del('entries', id));
   },
   switch: () => {
     const r = running(store.data);
@@ -517,18 +615,15 @@ const actions = {
     segs.push({ s: other(cur.s), a: now, b: null });
     store.put('entries', { ...r, segs });
   },
-  stop: () => {
+  stop: () => stopFeed(Date.now()),
+  'stop-at': ({ min }) => {
     const r = running(store.data);
-    if (!r) return;
-    const now = Date.now();
-    const segs = r.segs.map((s) => ({ ...s }));
-    segs[segs.length - 1].b = now;
-    const done = { ...r, segs, end: now };
-    store.put('entries', done);
-    toast(`Feed saved · ${fmtHM(feedDur(done))}`, () => store.put('entries', r));
+    if (r) stopFeed(r.segs[r.segs.length - 1].a + +min * MIN);
   },
+  'still-going': ({ id }) => { ui.rescueOff[id] = true; render(); },
   diaper: ({ kind }) => {
     const e = { id: uid(), type: 'diaper', kind, at: Date.now() };
+    ui.hopUntil = Date.now() + 600;
     store.put('entries', e);
     toast(`${{ wet: 'Wet', dirty: 'Dirty', both: 'Wet + dirty' }[kind]} diaper logged`, () => store.del('entries', e.id));
   },
@@ -537,38 +632,65 @@ const actions = {
     const med = d.settings.meds.find((m) => m.id === id);
     if (!med) return;
     const st = medStatus(d, med, Date.now());
-    if (!st.ready && !confirm(`It hasn't been ${med.hours} hours since the last ${med.name}. Log it anyway?`)) return;
-    const e = { id: uid(), type: 'med', medId: id, name: med.name, at: Date.now() };
-    store.put('entries', e);
-    toast(`${med.name} logged`, () => store.del('entries', e.id));
+    const log = () => {
+      const e = { id: uid(), type: 'med', medId: id, name: med.name, at: Date.now() };
+      store.put('entries', e);
+      toast(`${med.name} logged`, () => store.del('entries', e.id));
+    };
+    if (st.ready) return log();
+    confirmSheet({
+      title: 'A little early',
+      body: `Last ${esc(med.name)} was at <b>${fmtTime(st.last.at)}</b>. Next dose is OK at <b>${fmtTime(st.readyAt)}</b>.`,
+      ok: 'Log it anyway', cancel: 'Wait',
+    }, log);
+  },
+  'confirm-ok': () => { const fn = ui.confirmFn; closeSheet(); if (fn) fn(); },
+  pick: ({ group, val }, el) => {
+    ui.form[group] = val;
+    el.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === el));
+    const other = document.getElementById(`${group}-other`);
+    if (other) other.hidden = val !== 'other';
+  },
+  nudge: ({ target, min }) => {
+    const el = document.getElementById(target);
+    const t = fromLocalInput(el.value);
+    if (t) el.value = toLocalInput(t + +min * MIN);
   },
   bottle: () => {
+    ui.form = { bago: '0' };
     openSheet(`<h2>Bottle</h2>
-      <div class="chips">${['1', '2', '3', '4', '5'].map((o) => `<button data-act="bottle-oz" data-oz="${o}">${o} oz</button>`).join('')}</div>
+      <div class="field"><span>When</span>${chipGroup('bago', [['0', 'Now'], ['15', '15m ago'], ['30', '30m ago'], ['60', '1h ago'], ['other', 'Other…']], '0')}</div>
+      <label class="field" id="bago-other" hidden><span>Time</span><input type="datetime-local" id="b-at" value="${toLocalInput(Date.now())}"></label>
+      <div class="field"><span>How much? Tap to save</span><div class="chips">${['1', '2', '3', '4', '5'].map((o) => `<button class="big-chip" data-act="bottle-oz" data-oz="${o}">${o} oz</button>`).join('')}</div></div>
       <label class="field"><span>Or another amount (oz)</span><input id="b-oz" inputmode="decimal"></label>
-      <label class="field"><span>Time</span><input type="datetime-local" id="b-at" value="${toLocalInput(Date.now())}"></label>
-      <div class="actions"><button class="btn primary" data-act="bottle-oz">Save</button><button class="btn" data-act="close">Cancel</button></div>`);
+      <div class="actions"><button class="btn primary" data-act="bottle-oz">Save</button><button class="btn soft" data-act="close">Cancel</button></div>`);
   },
   'bottle-oz': ({ oz }) => {
     const amount = oz || document.getElementById('b-oz').value.trim();
-    const at = fromLocalInput(document.getElementById('b-at').value) || Date.now();
+    const ago = ui.form.bago || '0';
+    const at = ago === 'other' ? (fromLocalInput(document.getElementById('b-at').value) || Date.now()) : Date.now() - +ago * MIN;
     const e = { id: uid(), type: 'bottle', oz: amount, at };
     store.put('entries', e);
     closeSheet();
     toast('Bottle logged', () => store.del('entries', e.id));
   },
   'past-feed': () => {
-    openSheet(`<h2>Log a past feed</h2>
-      <label class="field"><span>Started</span><input type="datetime-local" id="p-start" value="${toLocalInput(Date.now() - 30 * MIN)}"></label>
-      <label class="field"><span>Length (minutes)</span><input id="p-len" inputmode="numeric" value="15"></label>
-      <label class="field"><span>Sides</span><select id="p-sides"><option value="L">Left</option><option value="R">Right</option><option value="LR">Left, then Right</option><option value="RL">Right, then Left</option></select></label>
-      <div class="actions"><button class="btn primary" data-act="save-past">Save</button><button class="btn" data-act="close">Cancel</button></div>`);
+    const lf = store.data.entries.filter((e) => e.type === 'feed' && e.end).sort((a, b) => b.start - a.start)[0];
+    const side = lf ? nextSide(lf) : 'L';
+    ui.form = { pago: '30', plen: '15', psides: side };
+    openSheet(`<h2>Add a past feed</h2>
+      <div class="field"><span>Started</span>${chipGroup('pago', [['15', '15m ago'], ['30', '30m ago'], ['45', '45m ago'], ['60', '1h ago'], ['120', '2h ago'], ['other', 'Other…']], '30')}</div>
+      <label class="field" id="pago-other" hidden><span>Start time</span><input type="datetime-local" id="p-start" value="${toLocalInput(Date.now() - 30 * MIN)}"></label>
+      <div class="field"><span>How long</span>${chipGroup('plen', [['5', '5m'], ['10', '10m'], ['15', '15m'], ['20', '20m'], ['30', '30m']], '15')}</div>
+      <div class="field"><span>Sides</span>${chipGroup('psides', [['L', 'Left'], ['R', 'Right'], ['LR', 'Left → Right'], ['RL', 'Right → Left']], side)}</div>
+      <div class="actions"><button class="btn primary" data-act="save-past">Save feed</button><button class="btn soft" data-act="close">Cancel</button></div>`);
   },
   'save-past': () => {
-    const start = fromLocalInput(document.getElementById('p-start').value);
-    const len = parseInt(document.getElementById('p-len').value, 10) || 15;
+    const f = ui.form;
+    const start = f.pago === 'other' ? fromLocalInput(document.getElementById('p-start').value) : Date.now() - +f.pago * MIN;
+    const len = +f.plen || 15;
     if (!start) return;
-    const segs = buildSegs(start, len, document.getElementById('p-sides').value);
+    const segs = buildSegs(start, len, f.psides || 'L');
     store.put('entries', { id: uid(), type: 'feed', start, end: segs[segs.length - 1].b, segs });
     closeSheet();
     toast('Feed logged');
@@ -638,9 +760,9 @@ const actions = {
   },
   'del-med': ({ id }) => {
     const med = store.data.settings.meds.find((m) => m.id === id);
-    if (med && med.name && !confirm(`Remove ${med.name}?`)) return;
-    store.set({ meds: store.data.settings.meds.filter((m) => m.id !== id) });
-    render();
+    const go = () => { store.set({ meds: store.data.settings.meds.filter((m) => m.id !== id) }); render(); };
+    if (!med || !med.name) return go();
+    confirmSheet({ title: `Remove ${esc(med.name)}?`, body: 'Its timer disappears from Today. Doses already logged stay in History.', ok: 'Remove', danger: true }, go);
   },
   'copy-setup': async () => {
     const code = store.setupCode();
@@ -653,9 +775,15 @@ const actions = {
     }
   },
   disconnect: () => {
-    if (!confirm('Disconnect this phone? Your data stays safe in GitHub, and you can reconnect with the setup code.')) return;
-    store.disconnect();
-    ui.tab = 'home';
+    confirmSheet({ title: 'Disconnect this phone?', body: 'Your data stays safe in GitHub. You can reconnect with the setup code from the other phone.', ok: 'Disconnect', danger: true }, () => {
+      store.disconnect();
+      ui.tab = 'home';
+      render();
+    });
+  },
+  theme: ({ val }) => {
+    try { localStorage.setItem('mt.theme', val); } catch {}
+    applyTheme();
     render();
   },
 
@@ -689,10 +817,10 @@ const actions = {
     toast('Note saved');
   },
   'msg-del': ({ id }) => {
-    if (!confirm('Delete this note?')) return;
-    store.del('messages', id);
-    closeSheet();
-    render();
+    confirmSheet({ title: 'Delete this note?', body: 'This can’t be undone.', ok: 'Delete note', danger: true }, () => {
+      store.del('messages', id);
+      render();
+    });
   },
 
   // setup
