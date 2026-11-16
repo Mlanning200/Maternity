@@ -14,7 +14,7 @@ export const VERSES = [
   ['Psalm 139:13–14', 'For you created my inmost being; you knit me together in my mother’s womb. I praise you because I am fearfully and wonderfully made; your works are wonderful, I know that full well.'],
   ['Lamentations 3:22–23', 'Because of the Lord’s great love we are not consumed, for his compassions never fail. They are new every morning; great is your faithfulness.'],
   ['Psalm 121:3–4', 'He will not let your foot slip— he who watches over you will not slumber; indeed, he who watches over Israel will neither slumber nor sleep.'],
-  ['Proverbs 31:25', 'She is clothed with strength and dignity; she can laugh at the days to come.'],
+  ['Psalm 28:7', 'The Lord is my strength and my shield; my heart trusts in him, and he helps me. My heart leaps for joy, and with my song I praise him.'],
   ['2 Corinthians 12:9', 'But he said to me, “My grace is sufficient for you, for my power is made perfect in weakness.”'],
   ['Isaiah 66:13', 'As a mother comforts her child, so will I comfort you; and you will be comforted over Jerusalem.'],
   ['Philippians 4:6–7', 'Do not be anxious about anything, but in every situation, by prayer and petition, with thanksgiving, present your requests to God. And the peace of God, which transcends all understanding, will guard your hearts and your minds in Christ Jesus.'],
