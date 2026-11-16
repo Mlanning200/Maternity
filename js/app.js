@@ -1,5 +1,6 @@
 import { Store } from './store.js';
 import { VERSES, NIV_NOTICE } from './verses.js';
+import { chick, icons } from './art.js';
 
 const store = new Store();
 const ui = { tab: 'home', msgUnlocked: false, histDays: 14, pendingRender: false, setupError: '' };
@@ -7,8 +8,10 @@ const $app = document.getElementById('app');
 const $nav = document.getElementById('nav');
 const $sheet = document.getElementById('sheet');
 const $toast = document.getElementById('toast');
+$nav.innerHTML = [['home', 'egg', 'Today'], ['history', 'calendar', 'History'], ['settings', 'settings', 'Settings']]
+  .map(([t, i, l]) => `<button data-act="tab" data-tab="${t}">${icons[i]}<span>${l}</span></button>`).join('');
 
-const APP_VERSION = '1.2';
+const APP_VERSION = '2.0';
 const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 
 // ---------- helpers ----------
@@ -51,10 +54,11 @@ function babyDay(bday, now = Date.now()) {
 const dateOfDay = (bday, n) => birthDate(bday) + (n - 1) * DAY;
 function ageLabel(bday) {
   const n = babyDay(bday);
-  if (n == null) return 'Add the birthday in Settings';
+  if (n == null) return 'Add her birthday in Settings';
   if (n < 1) return 'Coming soon';
+  if (n === 1) return 'Born today · Day 1';
   const days = n - 1;
-  if (days < 14) return `Day ${n}`;
+  if (days < 14) return `${days} day${days > 1 ? 's' : ''} old · Day ${n}`;
   const w = Math.floor(days / 7), d = days % 7;
   return `${w} weeks${d ? `, ${d} day${d > 1 ? 's' : ''}` : ''} old · Day ${n}`;
 }
@@ -66,34 +70,64 @@ const running = (d) => d.entries.find((e) => e.type === 'feed' && !e.end);
 const sorted = (d) => [...d.entries].sort((a, b) => tOf(b) - tOf(a));
 const feedSides = (e) => e.segs.map((s) => s.s).filter((s, i, a) => i === 0 || a[i - 1] !== s);
 
-function describe(e, d) {
+const KIND = { wet: 'Wet diaper', dirty: 'Dirty diaper', both: 'Wet + dirty' };
+
+function greeting(now = new Date()) {
+  const h = now.getHours();
+  if (h < 5 || h >= 22) return 'Night shift';
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+/** One row of the activity timeline. */
+function row(e, d) {
+  let icon, title, meta = '';
   if (e.type === 'feed') {
-    const sides = e.segs.map((s) => `<span class="pill ${s.s}">${s.s} ${fmtHM((s.b ?? Date.now()) - s.a)}</span>`).join('');
-    return e.end ? `${sides}` : `${sides}<small>feeding now</small>`;
-  }
-  if (e.type === 'bottle') return `<span class="dot bottle"></span>Bottle${e.oz ? ` · ${esc(e.oz)} oz` : ''}`;
-  if (e.type === 'diaper') return `<span class="dot diaper"></span>${{ wet: 'Wet', dirty: 'Dirty', both: 'Wet + dirty' }[e.kind] || 'Diaper'} diaper`;
-  if (e.type === 'med') {
+    const sides = feedSides(e);
+    icon = `<span class="tl-ico egg-ico ${lastSide(e)}">${sides.length > 1 ? sides.join('') : sides[0]}</span>`;
+    title = sides.map(sideName).join(' → ');
+    meta = e.end ? `${fmtHM(feedDur(e))} · ${e.segs.map((s) => `${s.s} ${fmtHM((s.b ?? Date.now()) - s.a)}`).join(', ')}` : '<span class="live">Feeding now</span>';
+  } else if (e.type === 'bottle') {
+    icon = `<span class="tl-ico bottle">${icons.bottle}</span>`;
+    title = 'Bottle';
+    meta = e.oz ? `${esc(e.oz)} oz` : '';
+  } else if (e.type === 'diaper') {
+    icon = `<span class="tl-ico diaper ${e.kind}">${icons[e.kind === 'wet' ? 'drop' : e.kind === 'dirty' ? 'dirty' : 'both']}</span>`;
+    title = KIND[e.kind] || 'Diaper';
+  } else if (e.type === 'med') {
     const med = d.settings.meds.find((m) => m.id === e.medId);
-    return `<span class="dot med"></span>${esc(med ? med.name : e.name || 'Medicine')}`;
+    icon = `<span class="tl-ico med">${icons.pill}</span>`;
+    title = esc(med ? med.name : e.name || 'Medicine');
   }
-  return '';
+  return `<li><button class="tl-row" data-act="edit" data-id="${esc(e.id)}">
+    ${icon}<span class="tl-body"><span class="tl-title">${title}</span>${meta ? `<span class="tl-meta">${meta}</span>` : ''}</span>
+    <span class="tl-time">${fmtTime(tOf(e))}</span></button></li>`;
 }
-function timeCell(e) {
-  if (e.type === 'feed') return fmtTime(e.start);
-  return fmtTime(e.at);
+
+function timeline(list, d, emptyText = 'Nothing logged yet today') {
+  if (!list.length) return `<div class="empty">${chick('sleepy', 'empty-chick')}<p>${emptyText}</p></div>`;
+  return `<ul class="timeline">${list.map((e) => row(e, d)).join('')}</ul>`;
 }
+
+// The ring fills over 20 minutes on the current side.
+const ringPct = (ms) => Math.min(100, (ms / (20 * MIN)) * 100).toFixed(2);
 
 // ---------- rendering ----------
 function syncBadge() {
   const s = store.status;
-  const label = { ok: 'Synced', idle: 'Synced', pending: 'Saving…', offline: 'Offline', auth: 'Sign-in issue' }[s];
-  return `<button class="sync ${s}" data-act="tab" data-tab="settings"><i></i>${label}</button>`;
+  const label = { ok: 'Synced', idle: 'Synced', pending: 'Saving', offline: 'Offline', auth: 'Reconnect' }[s];
+  return `<button class="sync ${s}" data-act="tab" data-tab="settings" aria-label="Sync: ${label}"><i></i><span>${label}</span></button>`;
 }
 
-function header(d) {
+function header(d, title, sub) {
   const s = d.settings;
-  return `<header class="top"><div><h1>${esc(s.babyName || 'Baby')}</h1><div class="sub">${esc(ageLabel(s.birthday))}</div></div>${syncBadge()}</header>`;
+  return `<header class="top">
+    <div class="avatar">${chick()}</div>
+    <div class="who"><div class="eyebrow">${title ? '' : greeting()}</div>
+      <h1>${esc(title || s.babyName || 'Lil Chicken')}</h1>
+      <div class="sub">${esc(sub ?? ageLabel(s.birthday))}</div></div>
+    ${syncBadge()}</header>`;
 }
 
 function todaysNote(d) {
@@ -104,12 +138,17 @@ function todaysNote(d) {
   const v = VERSES[((verseIdx % VERSES.length) + VERSES.length) % VERSES.length];
   if (!msgs.length && !s.showVerses) return '';
   const earlier = day ? d.messages.some((m) => +m.day < day) : false;
-  let h = '<section class="card note">';
-  for (const m of msgs) h += `<p class="msg">${esc(m.text)}</p>`;
-  if (msgs.length) h += `<div class="from">— with love</div>`;
-  if (s.showVerses) h += `<p class="verse">${esc(v[1])}</p><div class="ref">${esc(v[0])} (NIV)</div>`;
-  if (earlier) h += `<button class="linkish" data-act="earlier">Earlier notes</button>`;
-  return h + '</section>';
+  let h = '<section class="note"><div class="gingham"></div><div class="note-body">';
+  if (msgs.length) {
+    h += `<div class="note-label">${icons.heart} A note for you</div>`;
+    for (const m of msgs) h += `<p class="msg">${esc(m.text)}</p>`;
+  }
+  if (s.showVerses) {
+    h += `<div class="verse-wrap ${msgs.length ? 'split' : ''}"><div class="note-label">${icons.book} Verse for today</div>
+      <p class="verse">${esc(v[1])}</p><div class="ref">${esc(v[0])} · NIV</div></div>`;
+  }
+  if (earlier) h += `<button class="text-btn" data-act="earlier">Earlier notes ${icons.chevron}</button>`;
+  return h + '</div></section>';
 }
 
 function feedCard(d, now) {
@@ -117,12 +156,14 @@ function feedCard(d, now) {
   if (r) {
     const seg = r.segs[r.segs.length - 1];
     return `<section class="card running ${seg.s}">
-      <div class="side-label">Feeding · ${sideName(seg.s)}</div>
-      <div class="clock" data-clock="${seg.a}">${fmtClock(now - seg.a)}</div>
-      <div class="total">Started ${fmtTime(r.start)} · total <span data-feedtotal="${r.id}">${fmtHM(feedDur(r, now))}</span></div>
-      <div class="row">
-        <button class="btn ${other(seg.s)}" data-act="switch">Switch to ${sideName(other(seg.s))}</button>
-        <button class="btn primary" data-act="stop">Stop</button>
+      <div class="run-top"><span class="run-dot"></span>Feeding on the ${sideName(seg.s).toLowerCase()}</div>
+      <div class="ring" data-ring="${seg.a}" style="--p:${ringPct(now - seg.a)}%"><div class="ring-inner">
+        <div class="clock" data-clock="${seg.a}">${fmtClock(now - seg.a)}</div>
+        <div class="run-total">total <span data-feedtotal="${r.id}">${fmtHM(feedDur(r, now))}</span> · since ${fmtTime(r.start)}</div>
+      </div></div>
+      <div class="run-actions">
+        <button class="btn soft ${other(seg.s)}" data-act="switch">Switch to ${sideName(other(seg.s))}</button>
+        <button class="btn primary" data-act="stop">${icons.stop} Done</button>
       </div>
     </section>`;
   }
@@ -133,22 +174,25 @@ function feedCard(d, now) {
   const next = lf ? other(lastSide(lf)) : null;
   let since;
   if (!lastAny) {
-    since = `<div class="since"><div class="label">No feeds yet. Tap a side to start.</div></div>`;
+    since = `<div class="since"><div class="eyebrow">Ready when you are</div><div class="since-empty">Tap a side to start the first feed</div></div>`;
   } else {
-    let detail;
-    if (lf && lf.start === lastAny) detail = `${fmtTime(lf.start)} · ${fmtHM(feedDur(lf))} · ended on ${sideName(lastSide(lf))}`;
-    else detail = `Bottle at ${fmtTime(lb.at)}${lb.oz ? ` · ${esc(lb.oz)} oz` : ''}`;
-    since = `<div class="since"><div class="big" data-ago="${lastAny}">${fmtHM(now - lastAny)}</div><div class="label">since last feed started · ${detail}</div></div>`;
+    const isFeed = lf && lf.start === lastAny;
+    const meta = isFeed
+      ? `<span class="chip ${lastSide(lf)}">Ended ${sideName(lastSide(lf))}</span><span>${fmtTime(lf.start)} · ${fmtHM(feedDur(lf))}</span>`
+      : `<span class="chip">Bottle</span><span>${fmtTime(lb.at)}${lb.oz ? ` · ${esc(lb.oz)} oz` : ''}</span>`;
+    since = `<div class="since"><div class="eyebrow">Last feed started</div>
+      <div class="big"><span data-ago="${lastAny}">${fmtHM(now - lastAny)}</span><small>ago</small></div>
+      <div class="since-meta">${meta}</div></div>`;
   }
-  return `<section class="card">
+  const egg = (s) => `<button class="egg ${s} ${next === s ? 'next' : ''}" data-act="start" data-side="${s}">
+      ${next === s ? '<span class="next-tag">Next</span>' : ''}
+      <span class="egg-letter">${s}</span><span class="egg-name">${sideName(s)}</span></button>`;
+  return `<section class="card hero">
     ${since}
-    <div class="sides">
-      <button class="side-btn L ${next === 'L' ? 'next' : ''}" data-act="start" data-side="L">Left<small>Start</small></button>
-      <button class="side-btn R ${next === 'R' ? 'next' : ''}" data-act="start" data-side="R">Right<small>Start</small></button>
-    </div>
-    <div class="mini-row">
-      <button data-act="bottle">+ Bottle</button>
-      <button data-act="past-feed">+ Past feed</button>
+    <div class="eggs">${egg('L')}${egg('R')}</div>
+    <div class="quick">
+      <button data-act="bottle">${icons.bottle}<span>Bottle</span></button>
+      <button data-act="past-feed">${icons.clock}<span>Add past feed</span></button>
     </div>
   </section>`;
 }
@@ -158,11 +202,11 @@ function diaperCard(d, now) {
   const wet = today.filter((e) => e.kind === 'wet' || e.kind === 'both').length;
   const dirty = today.filter((e) => e.kind === 'dirty' || e.kind === 'both').length;
   return `<section class="card">
-    <h2>Diapers <span class="count">· ${wet} wet · ${dirty} dirty today</span></h2>
-    <div class="diapers">
-      <button data-act="diaper" data-kind="wet">Wet</button>
-      <button data-act="diaper" data-kind="dirty">Dirty</button>
-      <button data-act="diaper" data-kind="both">Both</button>
+    <div class="card-head"><h2>Diapers</h2><span class="stat"><b>${wet}</b> wet · <b>${dirty}</b> dirty today</span></div>
+    <div class="tiles">
+      <button class="tile wet" data-act="diaper" data-kind="wet">${icons.drop}<span>Wet</span></button>
+      <button class="tile dirty" data-act="diaper" data-kind="dirty">${icons.dirty}<span>Dirty</span></button>
+      <button class="tile both" data-act="diaper" data-kind="both">${icons.both}<span>Both</span></button>
     </div>
   </section>`;
 }
@@ -174,48 +218,49 @@ function medStatus(d, med, now) {
 }
 
 function medsCard(d, now) {
-  const meds = d.settings.meds;
-  let h = '<section class="card"><h2>Medicine</h2>';
-  for (const med of meds) {
+  let h = '<section class="card"><div class="card-head"><h2>Medicine</h2></div>';
+  for (const med of d.settings.meds) {
     const st = medStatus(d, med, now);
     const when = st.ready
-      ? `<span class="ok"><b class="ok">OK to take now</b></span>${st.last ? ` · last ${fmtTime(st.last.at)}` : ''}`
-      : `Next at <b>${fmtTime(st.readyAt)}</b> · in <span data-countdown="${st.readyAt}">${fmtHM(st.readyAt - now + MIN - 1)}</span>`;
-    h += `<div class="med"><div class="info"><div class="name">${esc(med.name)}</div><div class="when">${when}</div></div>
-      <button class="${st.ready ? '' : 'wait'}" data-act="med" data-id="${esc(med.id)}">Took it</button></div>`;
+      ? `<span class="ok">OK to take now</span>${st.last ? ` · last at ${fmtTime(st.last.at)}` : ''}`
+      : `Next <b>${fmtTime(st.readyAt)}</b> · in <span data-countdown="${st.readyAt}">${fmtHM(st.readyAt - now + MIN - 1)}</span>`;
+    const pct = st.ready || !st.last ? 100 : Math.min(100, Math.max(0, ((now - st.last.at) / (st.readyAt - st.last.at)) * 100));
+    h += `<div class="med ${st.ready ? 'ready' : ''}">
+      <span class="med-ico">${icons.pill}</span>
+      <div class="med-info"><div class="med-name">${esc(med.name || 'Medicine')}</div><div class="med-when">${when}</div>
+        <div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div></div>
+      <button class="med-btn" data-act="med" data-id="${esc(med.id)}">Took it</button></div>`;
   }
   return h + '</section>';
 }
 
-function entryList(list, d) {
-  if (!list.length) return '<div class="empty">Nothing yet</div>';
-  return '<ul class="list">' + list.map((e) => `<li><button data-act="edit" data-id="${esc(e.id)}">
-      <span class="time">${timeCell(e)}</span><span class="what">${describe(e, d)}</span><span class="chev">›</span>
-    </button></li>`).join('') + '</ul>';
-}
-
 function todayList(d, now) {
   const list = sorted(d).filter((e) => tOf(e) >= startOfDay(now) && (d.settings.showDiapers || e.type !== 'diaper'));
-  return `<section class="card"><h2>Today</h2>${entryList(list, d)}</section>`;
+  return `<section class="card"><div class="card-head"><h2>Today</h2><span class="stat">${daySummary(list, d.settings.showDiapers)}</span></div>${timeline(list, d)}</section>`;
 }
 
 function renderHome(d) {
   const now = Date.now();
   const s = d.settings;
-  return header(d) + todaysNote(d) + feedCard(d, now)
+  return header(d) + feedCard(d, now) + todaysNote(d)
     + (s.showDiapers ? diaperCard(d, now) : '')
     + (s.showMeds && s.meds.length ? medsCard(d, now) : '')
     + todayList(d, now);
 }
 
+function counts(list) {
+  return {
+    feeds: list.filter((e) => e.type === 'feed').length,
+    bottles: list.filter((e) => e.type === 'bottle').length,
+    wet: list.filter((e) => e.type === 'diaper' && (e.kind === 'wet' || e.kind === 'both')).length,
+    dirty: list.filter((e) => e.type === 'diaper' && (e.kind === 'dirty' || e.kind === 'both')).length,
+  };
+}
 function daySummary(list, showDiapers) {
-  const feeds = list.filter((e) => e.type === 'feed').length;
-  const bottles = list.filter((e) => e.type === 'bottle').length;
-  const wet = list.filter((e) => e.type === 'diaper' && (e.kind === 'wet' || e.kind === 'both')).length;
-  const dirty = list.filter((e) => e.type === 'diaper' && (e.kind === 'dirty' || e.kind === 'both')).length;
-  const parts = [`${feeds} feed${feeds === 1 ? '' : 's'}`];
-  if (bottles) parts.push(`${bottles} bottle${bottles === 1 ? '' : 's'}`);
-  if (showDiapers) parts.push(`${wet} wet`, `${dirty} dirty`);
+  const c = counts(list);
+  const parts = [`${c.feeds} feed${c.feeds === 1 ? '' : 's'}`];
+  if (c.bottles) parts.push(`${c.bottles} bottle${c.bottles === 1 ? '' : 's'}`);
+  if (showDiapers) parts.push(`${c.wet} wet`, `${c.dirty} dirty`);
   return parts.join(' · ');
 }
 
@@ -228,104 +273,113 @@ function renderHistory(d) {
     groups.get(k).push(e);
   }
   const keys = [...groups.keys()];
-  let h = header(d);
-  if (!keys.length) return h + '<section class="card"><div class="empty">Nothing logged yet</div></section>';
+  let h = header(d, 'History', 'Every feed, day by day');
+  if (!keys.length) return h + `<section class="card">${timeline([], d, 'Nothing logged yet')}</section>`;
   for (const k of keys.slice(0, ui.histDays)) {
     const list = groups.get(k);
+    const c = counts(list);
     const n = babyDay(d.settings.birthday, k);
     const title = k === startOfDay(Date.now()) ? 'Today' : k === startOfDay(Date.now() - DAY) ? 'Yesterday' : fmtDate(k);
-    h += `<section class="card"><div class="day-head"><h3>${title}</h3><span>${n && n > 0 ? `Day ${n}` : ''}</span></div>
-      <div class="day-sum hint">${daySummary(list, d.settings.showDiapers)}</div>${entryList(list, d)}</section>`;
+    const stat = (v, l, cls) => `<div class="mini ${cls}"><b>${v}</b><span>${l}</span></div>`;
+    h += `<section class="card"><div class="card-head"><h2>${title}</h2><span class="stat">${n && n > 0 ? `Day ${n}` : ''}</span></div>
+      <div class="minis">${stat(c.feeds, c.feeds === 1 ? 'feed' : 'feeds', 'f')}${c.bottles ? stat(c.bottles, c.bottles === 1 ? 'bottle' : 'bottles', 'b') : ''}${d.settings.showDiapers ? stat(c.wet, 'wet', 'w') + stat(c.dirty, 'dirty', 'd') : ''}</div>
+      ${timeline(list, d)}</section>`;
   }
-  if (keys.length > ui.histDays) h += `<button class="btn full" data-act="more-history">Show more days</button>`;
+  if (keys.length > ui.histDays) h += `<button class="btn soft full" data-act="more-history">Show earlier days</button>`;
   return h;
 }
 
 function renderSettings(d) {
   const s = d.settings;
-  const tog = (key, label) => `<label class="toggle"><span>${label}</span><input type="checkbox" class="switch" data-set="${key}" ${s[key] ? 'checked' : ''}></label>`;
+  const tog = (key, label, ico) => `<label class="row"><span class="row-ico">${ico}</span><span class="row-label">${label}</span><input type="checkbox" class="switch" data-set="${key}" ${s[key] ? 'checked' : ''}></label>`;
   const statusText = {
     ok: 'Everything is saved and shared.', idle: 'Everything is saved and shared.',
-    pending: 'Saving changes…', offline: 'Offline. Changes are kept on this phone and will sync when you are back online.',
+    pending: 'Saving changes…', offline: 'Offline. Changes are kept on this phone and sync when you are back online.',
     auth: 'GitHub stopped accepting the access token (it may have expired). Disconnect, then connect again with a new token.',
   }[store.status];
-  return `<header class="top"><div><h1>Settings</h1><div class="sub">Shared between both phones</div></div>${syncBadge()}</header>
-  <section class="card"><h2>Baby</h2>
+  return `${header(d, 'Settings', 'Shared between both phones')}
+  <div class="group-label">Baby</div>
+  <section class="card form">
     <label class="field"><span>Name</span><input data-set="babyName" value="${esc(s.babyName)}" autocomplete="off" autocapitalize="words" placeholder="Baby's name"></label>
     <label class="field"><span>Birthday</span><input type="date" data-set="birthday" value="${esc(s.birthday)}"></label>
   </section>
-  <section class="card"><h2>Show on Today</h2>
-    ${tog('showDiapers', 'Diaper tracking')}
-    ${tog('showMeds', 'Medicine timer')}
-    ${tog('showVerses', 'Bible verse of the day')}
+  <div class="group-label">Show on Today</div>
+  <section class="card list-card">
+    ${tog('showDiapers', 'Diapers', icons.drop)}
+    ${tog('showMeds', 'Medicine timer', icons.pill)}
+    ${tog('showVerses', 'Verse of the day', icons.book)}
   </section>
-  <section class="card"><h2>Medicine</h2>
-    <div class="hint" style="margin:0 0 10px">Name, and hours to wait between doses.</div>
+  <div class="group-label">Medicine</div>
+  <section class="card form">
+    <div class="med-edit head"><span>Name</span><span>Hours apart</span><span></span></div>
     ${s.meds.map((m) => `<div class="med-edit">
       <input class="inp" data-med="${esc(m.id)}" data-field="name" value="${esc(m.name)}" placeholder="Name">
-      <input class="inp" data-med="${esc(m.id)}" data-field="hours" value="${esc(m.hours)}" inputmode="decimal" placeholder="Hours">
-      <button class="x" data-act="del-med" data-id="${esc(m.id)}" aria-label="Remove">×</button></div>`).join('')}
-    <button class="btn full" data-act="add-med">+ Add medicine</button>
-    <p class="hint">Follow the dosing her doctor gave. This timer is only a reminder.</p>
+      <input class="inp" data-med="${esc(m.id)}" data-field="hours" value="${esc(m.hours)}" inputmode="decimal" placeholder="6">
+      <button class="x" data-act="del-med" data-id="${esc(m.id)}" aria-label="Remove ${esc(m.name)}">×</button></div>`).join('')}
+    <button class="btn soft full" data-act="add-med">${icons.plus} Add medicine</button>
+    <p class="hint">Follow the dosing her doctor gave. This is only a reminder.</p>
   </section>
-  <section class="card"><h2>Notes for her</h2>
-    <p class="hint" style="margin:0 0 12px">Write messages ahead of time. Each one shows up on its day.</p>
-    <button class="btn full" data-act="tab" data-tab="messages">Open notes</button>
+  <div class="group-label">Notes for her</div>
+  <section class="card list-card">
+    <button class="row" data-act="tab" data-tab="messages"><span class="row-ico">${icons.heart}</span><span class="row-label">Write notes ahead of time<small>${d.messages.length} written${s.msgPin ? ' · locked with PIN' : ''}</small></span>${icons.chevron}</button>
   </section>
-  <section class="card"><h2>Sync</h2>
-    <p style="margin:0 0 12px">${statusText}</p>
-    <button class="btn full" data-act="copy-setup">Copy setup code for the other phone</button>
-    <p class="hint">Text or AirDrop it, then paste it in the app on the other iPhone. Treat it like a password.</p>
-    <div class="actions" style="margin-top:12px"><button class="btn danger full" data-act="disconnect">Disconnect this phone</button></div>
+  <div class="group-label">Sync</div>
+  <section class="card form">
+    <p class="sync-text">${syncBadge()} ${statusText}</p>
+    <button class="btn soft full" data-act="copy-setup">${icons.link} Copy setup code for the other phone</button>
+    <p class="hint">Text or AirDrop it, then paste it into Lil Chicken on the other iPhone. Treat it like a password.</p>
+    <button class="btn ghost-danger full" data-act="disconnect">Disconnect this phone</button>
   </section>
-  <p class="fine">${esc(NIV_NOTICE)}<br><br>App version ${APP_VERSION}</p>`;
+  <div class="colophon">${chick('sleepy')}<p>Lil Chicken · version ${APP_VERSION}</p><p class="fine">${esc(NIV_NOTICE)}</p></div>`;
 }
 
 function renderMessages(d) {
   const s = d.settings;
-  const back = `<button class="back" data-act="tab" data-tab="settings">‹ Settings</button>`;
+  const back = `<button class="back" data-act="tab" data-tab="settings">${icons.back} Settings</button>`;
   if (s.msgPin && !ui.msgUnlocked) {
-    return `${back}<section class="card"><h2>Notes for her</h2>
-      <label class="field"><span>PIN</span><input id="pin" type="password" inputmode="numeric" autocomplete="off"></label>
+    return `${back}<section class="card lockcard">
+      <div class="lock-ico">${icons.lock}</div><h2>Notes are locked</h2>
+      <p class="hint">Enter the PIN to see and write notes.</p>
+      <input id="pin" class="inp pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN">
       <button class="btn primary full" data-act="unlock">Unlock</button>
       <div id="pin-err" class="err"></div></section>`;
   }
   const today = babyDay(s.birthday);
   const msgs = [...d.messages].sort((a, b) => a.day - b.day);
-  let h = `${back}<header class="top"><div><h1>Notes for her</h1><div class="sub">${today ? `Today is Day ${today}` : 'Set the birthday in Settings first'}</div></div></header>`;
-  h += `<button class="btn primary full" data-act="msg-new" style="margin-bottom:14px">+ Write a note</button>`;
-  h += '<section class="card">';
-  if (!msgs.length) h += '<div class="empty">No notes yet</div>';
-  else h += '<ul class="list">' + msgs.map((m) => {
-    const when = s.birthday ? fmtShortDate(dateOfDay(s.birthday, m.day)) : '';
-    const tag = today && m.day < today ? ' · shown' : today && m.day === today ? ' · today' : '';
-    return `<li class="msg-item"><button data-act="msg-edit" data-id="${esc(m.id)}"><span class="time">Day ${esc(m.day)}<br><small>${when}</small></span>
-      <span class="what">${esc(m.text)}<br><small>${tag.replace(' · ', '')}</small></span><span class="chev">›</span></button></li>`;
-  }).join('') + '</ul>';
-  h += '</section>';
-  h += `<section class="card"><h2>Keep them a surprise</h2>
-    <p class="hint" style="margin:0 0 12px">${s.msgPin ? 'A PIN is set for this page.' : 'Add a PIN so this page stays locked on her phone.'}</p>
-    <label class="field"><span>${s.msgPin ? 'Change PIN' : 'PIN'}</span><input id="newpin" inputmode="numeric" autocomplete="off" placeholder="4 digits"></label>
-    <button class="btn full" data-act="set-pin">${s.msgPin ? 'Change PIN' : 'Set PIN'}</button>
-    ${s.msgPin ? '<button class="btn danger full" data-act="clear-pin">Remove PIN</button>' : ''}</section>`;
+  let h = `${back}<header class="top plain"><div class="who"><h1>Notes for her</h1><div class="sub">${today ? `Today is Day ${today}` : 'Set the birthday in Settings first'}</div></div></header>`;
+  h += `<button class="btn primary full" data-act="msg-new" style="margin-bottom:16px">${icons.plus} Write a note</button>`;
+  if (!msgs.length) h += `<section class="card">${timeline([], d, 'No notes yet. Write one for tomorrow!')}</section>`;
+  else {
+    h += '<section class="card list-card">' + msgs.map((m) => {
+      const when = s.birthday ? fmtShortDate(dateOfDay(s.birthday, m.day)) : '';
+      const state = today && m.day < today ? 'shown' : today && m.day === today ? 'today' : 'upcoming';
+      return `<button class="row note-row ${state}" data-act="msg-edit" data-id="${esc(m.id)}">
+        <span class="day-badge"><b>${esc(m.day)}</b><small>${when}</small></span>
+        <span class="row-label">${esc(m.text)}<small>${{ shown: 'Already shown', today: 'Showing today', upcoming: 'Coming up' }[state]}</small></span>${icons.chevron}</button>`;
+    }).join('') + '</section>';
+  }
+  h += `<div class="group-label">Keep them a surprise</div><section class="card form">
+    <p class="hint" style="margin-top:0">${s.msgPin ? 'This page is locked with a PIN.' : 'Add a PIN so this page stays locked on her phone.'}</p>
+    <div class="pin-row"><input id="newpin" class="inp" inputmode="numeric" autocomplete="off" placeholder="${s.msgPin ? 'New PIN' : '4 digits'}">
+    <button class="btn soft" data-act="set-pin">${s.msgPin ? 'Change' : 'Set PIN'}</button></div>
+    ${s.msgPin ? '<button class="btn ghost-danger full" data-act="clear-pin">Remove PIN</button>' : ''}</section>`;
   return h;
 }
 
 function renderSetup() {
   const standalone = window.navigator.standalone || matchMedia('(display-mode: standalone)').matches;
   return `<div class="setup">
-    <h1>Welcome</h1>
-    <p>Connect this phone once and it stays connected.</p>
-    ${standalone ? '' : `<section class="card"><h2>First, add to Home Screen</h2>
-      <p style="margin:0">In Safari, tap <b>Share</b> → <b>Add to Home Screen</b>, then open the app from your Home Screen and connect it there.</p></section>`}
-    <section class="card"><h2>Have a setup code?</h2>
+    <div class="setup-hero">${chick()}<h1>Lil Chicken</h1><p>Feeds, diapers and little notes,<br>shared between your two phones.</p></div>
+    ${standalone ? '' : `<section class="card callout"><h2>First, add to Home Screen</h2>
+      <p>In Safari, tap <b>Share</b> → <b>Add to Home Screen</b>. Then open Lil Chicken from your Home Screen and connect it there.</p></section>`}
+    <section class="card form"><h2>Have a setup code?</h2>
       <label class="field"><span>Paste the code from the other phone</span><input id="code" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="MT1:…"></label>
       <button class="btn primary full" data-act="connect-code">Connect</button>
     </section>
-    <section class="card"><h2>Or set up with GitHub</h2>
+    <section class="card form"><h2>Or set up with GitHub</h2>
       <label class="field"><span>Private data repo</span><input id="repo" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="yourname/maternity-data"></label>
       <label class="field"><span>Access token</span><input id="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…"></label>
-      <button class="btn primary full" data-act="connect">Connect</button>
+      <button class="btn soft full" data-act="connect">Connect</button>
     </section>
     <div class="err" id="setup-err">${esc(ui.setupError)}</div>
   </div>`;
@@ -353,6 +407,7 @@ function tick() {
   if (!store.configured() || document.hidden) return;
   const now = Date.now();
   $app.querySelectorAll('[data-clock]').forEach((el) => { el.textContent = fmtClock(now - +el.dataset.clock); });
+  $app.querySelectorAll('[data-ring]').forEach((el) => { el.style.setProperty('--p', ringPct(now - +el.dataset.ring) + '%'); });
   $app.querySelectorAll('[data-ago]').forEach((el) => { el.textContent = fmtHM(now - +el.dataset.ago); });
   $app.querySelectorAll('[data-countdown]').forEach((el) => { el.textContent = fmtHM(+el.dataset.countdown - now + MIN - 1); });
   const d = store.data;
@@ -369,7 +424,7 @@ function tick() {
 
 // ---------- sheets & toast ----------
 function openSheet(html) {
-  $sheet.innerHTML = `<div class="sheet" role="dialog">${html}</div>`;
+  $sheet.innerHTML = `<div class="sheet" role="dialog"><div class="grabber"></div>${html}</div>`;
   $sheet.hidden = false;
 }
 function closeSheet() { $sheet.hidden = true; $sheet.innerHTML = ''; }

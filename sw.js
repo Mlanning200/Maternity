@@ -1,6 +1,6 @@
 // Always ask GitHub for the newest files (revalidating, so it is quick when nothing changed),
 // and fall back to the last saved copy only when offline.
-const CACHE = 'little-one-v2';
+const CACHE = 'lil-chicken-v3';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => {

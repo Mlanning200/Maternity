@@ -1,11 +1,11 @@
 {
-  "name": "Little One",
-  "short_name": "Little One",
+  "name": "Lil Chicken",
+  "short_name": "Lil Chicken",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#FBF7F4",
-  "theme_color": "#FBF7F4",
+  "background_color": "#FFF8EB",
+  "theme_color": "#FFF8EB",
   "icons": [
     { "src": "icons/icon-180.png", "sizes": "180x180", "type": "image/png" },
     { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
