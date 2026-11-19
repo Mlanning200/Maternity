@@ -11,7 +11,7 @@ const $toast = document.getElementById('toast');
 $nav.innerHTML = [['home', 'egg', 'Today'], ['history', 'calendar', 'History'], ['settings', 'settings', 'Settings']]
   .map(([t, i, l]) => `<button data-act="tab" data-tab="${t}">${icons[i]}<span>${l}</span></button>`).join('');
 
-const APP_VERSION = '2.7';
+const APP_VERSION = '2.8';
 // The notification sender (a Cloudflare Worker, see push/worker.js).
 const PUSH_URL = 'https://lil-chicken-push.lilchicken-7535ca94.workers.dev';
 const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
@@ -1020,7 +1020,25 @@ store.onChange(() => {
   }
   render();
 });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { store.pull(); render(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { store.pull(); render(); checkForUpdate(); } });
+
+// iPhone keeps a Home Screen app alive in the background, so a new version would not load until
+// the app is closed. Whenever the app comes back, ask GitHub for the current version number and
+// reload onto it if it changed (but never while she is typing or has a sheet open).
+let lastUpdateCheck = 0;
+async function checkForUpdate() {
+  if (Date.now() - lastUpdateCheck < 60 * 1000) return;
+  lastUpdateCheck = Date.now();
+  try {
+    const res = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    const { v } = await res.json();
+    if (!v || v === APP_VERSION) return;
+    const a = document.activeElement;
+    const busy = (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.type !== 'checkbox') || !$sheet.hidden;
+    if (!busy) location.reload();
+  } catch {}
+}
+setTimeout(checkForUpdate, 3000);
 window.addEventListener('online', () => store.pull());
 setInterval(tick, 1000);
 setInterval(() => { if (!document.hidden) store.pull(); }, 15000);
