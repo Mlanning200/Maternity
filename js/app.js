@@ -11,7 +11,9 @@ const $toast = document.getElementById('toast');
 $nav.innerHTML = [['home', 'egg', 'Today'], ['history', 'calendar', 'History'], ['settings', 'settings', 'Settings']]
   .map(([t, i, l]) => `<button data-act="tab" data-tab="${t}">${icons[i]}<span>${l}</span></button>`).join('');
 
-const APP_VERSION = '2.5';
+const APP_VERSION = '2.6';
+// The notification sender (a Cloudflare Worker, see push/worker.js).
+const PUSH_URL = '__PUSH_URL__';
 const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 
 // ---------- helpers ----------
@@ -355,6 +357,7 @@ function renderSettings(d) {
     <div class="seg">${[['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => `<button data-act="theme" data-val="${v}" class="${themePref() === v ? 'on' : ''}">${l}</button>`).join('')}</div>
     <p class="hint">Auto goes dark from 9 pm to 6:30 am, and whenever the iPhone is in dark mode.</p>
   </section>
+  ${pushSection()}
   <div class="group-label">Sync</div>
   <section class="card form">
     <p class="sync-text">${syncBadge(true)} ${statusText}</p>
@@ -611,6 +614,70 @@ function applyTheme() {
 applyTheme();
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
 
+// ---------- push notifications (per phone) ----------
+const pushDefaults = { on: false, med: true, feed: true, feedHours: 3, forgotten: true };
+function pushPrefs() { try { return { ...pushDefaults, ...JSON.parse(localStorage.getItem('mt.push') || '{}') }; } catch { return { ...pushDefaults }; } }
+function savePushPrefs(p) { try { localStorage.setItem('mt.push', JSON.stringify(p)); } catch {} }
+function deviceId() {
+  try {
+    let id = localStorage.getItem('mt.device');
+    if (!id) { id = 'd-' + crypto.getRandomValues(new Uint32Array(3)).join('-'); localStorage.setItem('mt.device', id); }
+    return id;
+  } catch { return 'd-unsaved'; }
+}
+function pushSupport() {
+  const standalone = window.navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+  if ('PushManager' in window && 'Notification' in window && 'serviceWorker' in navigator) return 'ok';
+  return standalone ? 'old-ios' : 'not-home-screen';
+}
+async function pushPost(path, extra = {}) {
+  const res = await fetch(PUSH_URL + path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId: deviceId(), repo: store.cfg.repo, token: store.cfg.token, ...extra }),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || `The notification sender answered ${res.status}.`);
+  return j;
+}
+const b64uBytes = (str) => Uint8Array.from(atob(str.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((str.length + 3) % 4)), (c) => c.charCodeAt(0));
+async function pushRegister(p) {
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) {
+    const { key } = await (await fetch(PUSH_URL + '/vapid')).json();
+    sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uBytes(key) });
+  }
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  await pushPost('/register', { subscription: sub.toJSON(), prefs: { med: p.med, feed: p.feed, feedHours: p.feedHours, forgotten: p.forgotten, tz } });
+}
+let pushSaveTimer;
+function pushPrefsChanged(p) {
+  savePushPrefs(p);
+  render();
+  if (!p.on) return;
+  clearTimeout(pushSaveTimer);
+  pushSaveTimer = setTimeout(() => pushRegister(p).then(() => toast('Notification settings saved')).catch((e) => toast(e.message)), 400);
+}
+function pushSection() {
+  const p = pushPrefs();
+  const sup = pushSupport();
+  const tog = (key, label, ico, sub) => `<label class="row"><span class="row-ico">${ico}</span><span class="row-label">${label}<small>${sub}</small></span><input type="checkbox" class="switch" data-push="${key}" ${p[key] ? 'checked' : ''}></label>`;
+  let body;
+  if (PUSH_URL.startsWith('__')) body = '<p class="hint" style="margin:0">Notifications are being set up. Check back soon.</p>';
+  else if (sup === 'not-home-screen') body = '<p class="hint" style="margin:0">Open Lil Chicken from your Home Screen to turn on notifications.</p>';
+  else if (sup === 'old-ios') body = '<p class="hint" style="margin:0">Notifications need iOS 16.4 or newer. Update the iPhone in Settings → General → Software Update.</p>';
+  else if (!p.on) body = `<p class="hint" style="margin:0 0 12px">Get a nudge on this phone when medicine is OK, when a feed is due, or if the timer was left running.</p>
+    <button class="btn primary full" data-act="push-on">${icons.bell} Turn on notifications</button>`;
+  else body = `<div class="list-in">
+      ${tog('med', 'Medicine ready', icons.pill, 'When the next dose is OK')}
+      ${tog('feed', 'Feed reminder', icons.clock, `${p.feedHours} hours after the last feed started`)}
+      ${p.feed ? `<div class="chips tight hours">${[2, 2.5, 3, 3.5, 4].map((h) => `<button data-act="push-hours" data-val="${h}" class="${p.feedHours === h ? 'on' : ''}">${h}h</button>`).join('')}</div>` : ''}
+      ${tog('forgotten', 'Forgotten timer', icons.egg, 'If a side runs 45 minutes')}
+    </div>
+    <div class="push-actions"><button class="btn soft" data-act="push-test">Send a test</button><button class="btn ghost-danger" data-act="push-off">Turn off</button></div>`;
+  return `<div class="group-label">Notifications · this phone</div><section class="card form">${body}</section>`;
+}
+
 // ---------- actions ----------
 const actions = {
   tab: ({ tab }) => { ui.tab = tab; closeSheet(); render(); window.scrollTo(0, 0); },
@@ -803,6 +870,31 @@ const actions = {
       render();
     });
   },
+  'push-on': () => {
+    // Ask right away: iOS only shows the permission prompt straight from a tap.
+    Notification.requestPermission().then(async (perm) => {
+      if (perm !== 'granted') { toast('Notifications are off for Lil Chicken. Turn them on in iPhone Settings → Notifications.'); return; }
+      const p = { ...pushPrefs(), on: true };
+      try { await pushRegister(p); savePushPrefs(p); render(); toast('Notifications are on'); }
+      catch (e) { toast(e.message || 'Could not turn on notifications.'); }
+    });
+  },
+  'push-hours': ({ val }) => pushPrefsChanged({ ...pushPrefs(), feedHours: +val }),
+  'push-test': async () => {
+    try { await pushPost('/test'); toast('Test sent. It should arrive in a few seconds.'); }
+    catch (e) { toast(e.message); }
+  },
+  'push-off': async () => {
+    const p = { ...pushPrefs(), on: false };
+    savePushPrefs(p);
+    render();
+    try {
+      const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+      if (sub) await sub.unsubscribe();
+      await pushPost('/unregister');
+    } catch {}
+    toast('Notifications are off on this phone');
+  },
   theme: ({ val }) => {
     try { localStorage.setItem('mt.theme', val); } catch {}
     applyTheme();
@@ -902,6 +994,8 @@ document.addEventListener('change', (ev) => {
     const key = el.dataset.set;
     const value = el.type === 'checkbox' ? el.checked : el.value.trim();
     if (store.data.settings[key] !== value) store.set({ [key]: value });
+  } else if (el.dataset.push) {
+    pushPrefsChanged({ ...pushPrefs(), [el.dataset.push]: el.checked });
   } else if (el.dataset.med) {
     const meds = store.data.settings.meds.map((m) => {
       if (m.id !== el.dataset.med) return m;

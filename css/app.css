@@ -332,6 +332,11 @@ main { max-width: 560px; margin: 0 auto; padding: calc(10px + env(safe-area-inse
 input[type=date], input[type=datetime-local] { font-family: var(--font); font-weight: 700; text-align: left; }
 input::-webkit-date-and-time-value { text-align: left; }
 .danger-zone { margin-top: 18px; padding-top: 8px; border-top: 1.5px solid var(--line); }
+.list-in .row { padding: 10px 0; }
+.list-in .row + .row, .list-in .hours + .row { border-top: 1.5px solid var(--line); }
+.chips.hours { margin: 0 0 12px 48px; }
+.chips.hours button { min-height: 38px; padding: 6px 14px; }
+.push-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
 .seg-label { font-size: 14px; font-weight: 800; color: var(--muted); margin-bottom: 8px; }
 .seg { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--sunk); border-radius: 14px; padding: 4px; gap: 4px; }
 .seg button { min-height: 40px; border-radius: 11px; font-weight: 900; color: var(--muted); }

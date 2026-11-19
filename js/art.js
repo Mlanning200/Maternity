@@ -40,6 +40,7 @@ export const icons = {
   bottle: I('<path d="M9 2.8h6M10 2.8v3L8 8.5V19a2.2 2.2 0 0 0 2.2 2.2h3.6A2.2 2.2 0 0 0 16 19V8.5l-2-2.7v-3M8 12h3M8 15.5h3"/>'),
   clock: I('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
   pill: I('<path d="M10.3 20.2a5 5 0 0 1-7-7l6.4-6.4a5 5 0 0 1 7 7z"/><path d="M6.5 10l7.5 7.5"/>'),
+  bell: I('<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2.2 2.2 0 0 0 4 0"/>'),
   plus: I('<path d="M12 5v14M5 12h14"/>'),
   chevron: I('<path d="M9 6l6 6-6 6"/>'),
   back: I('<path d="M15 6l-6 6 6 6"/>'),
