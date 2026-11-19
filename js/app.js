@@ -11,9 +11,9 @@ const $toast = document.getElementById('toast');
 $nav.innerHTML = [['home', 'egg', 'Today'], ['history', 'calendar', 'History'], ['settings', 'settings', 'Settings']]
   .map(([t, i, l]) => `<button data-act="tab" data-tab="${t}">${icons[i]}<span>${l}</span></button>`).join('');
 
-const APP_VERSION = '2.6';
+const APP_VERSION = '2.7';
 // The notification sender (a Cloudflare Worker, see push/worker.js).
-const PUSH_URL = '__PUSH_URL__';
+const PUSH_URL = 'https://lil-chicken-push.lilchicken-7535ca94.workers.dev';
 const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 
 // ---------- helpers ----------

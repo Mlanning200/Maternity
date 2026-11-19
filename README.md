@@ -48,3 +48,13 @@ Your entries live in a separate *private* repo (`maternity-data`) that only your
   and connect again on each phone.
 - **"Offline"**: changes are kept on the phone and sync when it's back online.
 - All data is in `maternity-data/data.json`, readable anytime on GitHub.
+
+## Notifications
+Each iPhone can turn on alerts in **Settings → Notifications · this phone** (open the app from the
+Home Screen; needs iOS 16.4+): medicine ready, feed reminder (2–4 hours after the last feed started),
+and a feed timer left running for 45 minutes.
+
+They are sent by a small Cloudflare Worker (`push/worker.js`, named `lil-chicken-push` in the
+Cloudflare account). Once a minute it reads `data.json` from the private data repo with the
+access token the phones gave it, and sends any alert that has just come due. It stores only the
+phones' notification addresses and settings, never a copy of the baby data.
