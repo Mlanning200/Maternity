@@ -104,6 +104,7 @@ function cleanPrefs(p = {}) {
     feed: p.feed !== false,
     feedHours: hours >= 1 && hours <= 8 ? hours : 3,
     forgotten: p.forgotten !== false,
+    pump: p.pump !== false,
     tz: typeof p.tz === 'string' && p.tz.length < 64 ? p.tz : 'America/Chicago',
   };
 }
@@ -126,6 +127,21 @@ function nextSide(f) {
   if (!t.L || !t.R) return other(last);
   if (Math.abs(t.L - t.R) < 2 * MIN) return last;
   return t.L < t.R ? 'L' : 'R';
+}
+const DAY = 24 * HOUR;
+// Local calendar date and hour in the phone's time zone.
+function localParts(ts, tz) {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(ts));
+  const g = (t) => parts.find((x) => x.type === t).value;
+  return { date: `${g('year')}-${g('month')}-${g('day')}`, hour: +g('hour') };
+}
+// Mirrors js/pump.js: hours between sessions when exclusively pumping.
+function pumpEvery(settings, now, tz) {
+  const every = +(settings.pump || {}).every;
+  if (every > 0) return every;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(settings.birthday || '')) return 2.5;
+  const days = Math.round((Date.parse(localParts(now, tz).date) - Date.parse(settings.birthday)) / DAY);
+  return days <= 60 ? 2.5 : days <= 180 ? 3.5 : 4;
 }
 const fmtTime = (ts, tz) => new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
 
@@ -154,6 +170,28 @@ export function dueAlerts(data, devices, now) {
     if (p.feed && lastFeedAt && !running && inWindow(lastFeedAt + p.feedHours * HOUR)) {
       const next = feeds[0] ? ` Start on the ${sideName(nextSide(feeds[0])).toLowerCase()}.` : '';
       out.push({ id, msg: { title: 'Time for a feed?', body: `${p.feedHours} hours since the last feed started at ${fmtTime(lastFeedAt, p.tz)}.${next}`, tag: 'feed' } });
+    }
+    const plan = (settings.pump || {}).plan;
+    if (p.pump && (plan === 'exclusive' || plan === 'stash')) {
+      const pumps = entries.filter((e) => e.type === 'pump').sort((a, b) => b.start - a.start);
+      if (!pumps.some((e) => !e.end)) {
+        if (plan === 'exclusive' && pumps[0]) {
+          const every = pumpEvery(settings, now, p.tz);
+          if (inWindow(pumps[0].start + every * HOUR)) {
+            out.push({ id, msg: { title: 'Time to pump', body: `It’s been ${Math.floor(every)}${every % 1 ? '½' : ''} hours since the last pump at ${fmtTime(pumps[0].start, p.tz)}.`, tag: 'pump' } });
+          }
+        }
+        if (plan === 'stash') {
+          const today = localParts(now, p.tz).date;
+          const pumpedToday = pumps.some((e) => localParts(e.start, p.tz).date === today);
+          const first = entries.filter((e) => e.type === 'feed' && e.end && !e.attempt)
+            .filter((e) => { const lp = localParts(e.start, p.tz); return lp.date === today && lp.hour >= 4; })
+            .sort((a, b) => a.start - b.start)[0];
+          if (!pumpedToday && first && inWindow(first.end + 30 * MIN)) {
+            out.push({ id, msg: { title: 'Good time to pump', body: `Her first feed today ended at ${fmtTime(first.end, p.tz)}. Morning is when supply is highest.`, tag: 'pump' } });
+          }
+        }
+      }
     }
     if (p.forgotten && running) {
       const seg = running.segs[running.segs.length - 1];

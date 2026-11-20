@@ -1,6 +1,7 @@
 import { Store } from './store.js';
 import { VERSES, NIV_NOTICE } from './verses.js';
 import { chick, icons } from './art.js';
+import { AGE_BANDS, STORAGE, pumpPlan, pumpEvery, nextPump, ageDays, bandFor } from './pump.js';
 
 const store = new Store();
 const ui = { tab: 'home', msgUnlocked: false, histDays: 14, pendingRender: false, setupError: '', form: {}, rescueOff: {}, hopUntil: 0, confirmFn: null };
@@ -11,7 +12,7 @@ const $toast = document.getElementById('toast');
 $nav.innerHTML = [['home', 'egg', 'Today'], ['history', 'calendar', 'History'], ['settings', 'settings', 'Settings']]
   .map(([t, i, l]) => `<button data-act="tab" data-tab="${t}">${icons[i]}<span>${l}</span></button>`).join('');
 
-const APP_VERSION = '2.8';
+const APP_VERSION = '2.9';
 // The notification sender (a Cloudflare Worker, see push/worker.js).
 const PUSH_URL = 'https://lil-chicken-push.lilchicken-7535ca94.workers.dev';
 const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
@@ -65,7 +66,10 @@ function ageLabel(bday) {
   return `${w} weeks${d ? `, ${d} day${d > 1 ? 's' : ''}` : ''} old · Day ${n}`;
 }
 
-const tOf = (e) => (e.type === 'feed' ? e.start : e.at);
+const tOf = (e) => e.start ?? e.at;
+const fmtOz = (v) => (v === '' || v == null || isNaN(+v) ? '' : `${+(+v).toFixed(1)} oz`);
+const fmtHrs = (h) => `${Math.floor(h)}${h % 1 ? '½' : ''}`;
+const PUMP_SIDE = { both: 'Both sides', L: 'Left', R: 'Right' };
 const isRealFeed = (e) => e.type === 'feed' && e.end && !e.attempt;
 const feedDur = (e, now = Date.now()) => e.segs.reduce((sum, s) => sum + ((s.b ?? now) - s.a), 0);
 const lastSide = (e) => e.segs[e.segs.length - 1].s;
@@ -109,6 +113,10 @@ function row(e, d) {
   } else if (e.type === 'diaper') {
     icon = `<span class="tl-ico diaper ${e.kind}">${icons[e.kind === 'wet' ? 'drop' : e.kind === 'dirty' ? 'dirty' : 'both']}</span>`;
     title = KIND[e.kind] || 'Diaper';
+  } else if (e.type === 'pump') {
+    icon = `<span class="tl-ico pump">${icons.pump}</span>`;
+    title = e.end ? `Pumped${e.oz ? ` · ${fmtOz(e.oz)}` : ''}` : 'Pumping';
+    meta = e.end ? `${PUMP_SIDE[e.side] || 'Both sides'} · ${fmtHM(e.end - e.start)}` : '<span class="live">Pumping now</span>';
   } else if (e.type === 'med') {
     const med = d.settings.meds.find((m) => m.id === e.medId);
     icon = `<span class="tl-ico med">${icons.pill}</span>`;
@@ -263,10 +271,55 @@ function todayList(d, now) {
   return `<section class="card"><div class="card-head"><h2>Today</h2><span class="stat">${daySummary(list, d.settings.showDiapers)}</span></div>${timeline(list, d)}</section>`;
 }
 
+function pumpCard(d, now) {
+  const np = nextPump(d, now);
+  if (np.state === 'off') return '';
+  const today = d.entries.filter((e) => e.type === 'pump' && e.end && e.start >= startOfDay(now));
+  const oz = today.reduce((t, e) => t + (+e.oz || 0), 0);
+  const head = `<div class="card-head"><h2>Pumping</h2><span class="stat">Today <b>${today.length}</b>${oz ? ` · <b>${+oz.toFixed(1)}</b> oz` : ''}</span></div>`;
+  if (np.state === 'running') {
+    const e = np.entry;
+    return `<section class="card pump-card running-pump">${head}
+      <div class="pump-run"><span class="pump-ico live">${icons.pump}</span>
+        <div><div class="pump-clock" data-clock="${e.start}">${fmtClock(now - e.start)}</div><div class="pump-sub">Pumping since ${fmtTime(e.start)}</div></div></div>
+      <div class="pump-actions"><button class="btn soft" data-act="pump-cancel">Cancel</button><button class="btn primary" data-act="pump-stop">${icons.stop} Done</button></div>
+    </section>`;
+  }
+  const { plan } = pumpPlan(d.settings);
+  const lastTxt = np.last ? `last at ${fmtTime(np.last.start)}${np.last.oz ? `, ${fmtOz(np.last.oz)}` : ''}` : '';
+  let big, sub, cls = '';
+  if (np.state === 'due') {
+    cls = 'due';
+    big = plan === 'stash' ? 'Good time to pump' : 'Time to pump';
+    sub = plan === 'stash' ? `Her first feed today ended at ${fmtTime(np.feed.end)}`
+      : np.last ? `It’s been <span data-ago="${np.last.start}">${fmtHM(now - np.last.start)}</span> since the last pump` : 'No pumps logged yet';
+  } else if (np.state === 'later') {
+    big = `Next pump around ${fmtTime(np.at)}`;
+    sub = `in <span data-countdown="${np.at}">${fmtHM(np.at - now + MIN - 1)}</span>${lastTxt ? ` · ${lastTxt}` : ''}`;
+  } else if (np.state === 'after-feed') {
+    big = 'After her first morning feed';
+    sub = 'Milk supply is usually highest in the morning';
+  } else {
+    cls = 'done';
+    big = 'Done for today';
+    sub = `${oz ? `${+oz.toFixed(1)} oz` : 'Pumped'} for the stash`;
+  }
+  const days = ageDays(d.settings.birthday, now);
+  const early = plan === 'stash' && days != null && days < 21
+    ? `<p class="pump-note">Many lactation experts suggest waiting until about 3–4 weeks, once breastfeeding is going well, unless her doctor says otherwise.</p>` : '';
+  return `<section class="card pump-card ${cls}">${head}
+    <div class="pump-status"><span class="pump-ico">${np.state === 'done' ? icons.check : icons.pump}</span>
+      <div><div class="pump-big">${big}</div><div class="pump-sub">${sub}</div></div></div>
+    ${early}
+    <div class="pump-actions"><button class="btn ${np.state === 'due' ? 'primary' : 'soft'}" data-act="pump-start">${icons.pump} Start pumping</button><button class="btn soft" data-act="pump-log">${icons.plus} Log</button></div>
+    <button class="text-btn" data-act="pump-guide">Pumping guide ${icons.chevron}</button>
+  </section>`;
+}
+
 function renderHome(d) {
   const now = Date.now();
   const s = d.settings;
-  return header(d) + feedCard(d, now)
+  return header(d) + feedCard(d, now) + pumpCard(d, now)
     + (s.showDiapers ? diaperCard(d, now) : '')
     + todaysNote(d)
     + (s.showMeds && s.meds.length ? medsCard(d, now) : '')
@@ -278,6 +331,8 @@ function counts(list) {
     feeds: list.filter((e) => e.type === 'feed' && !e.attempt).length,
     attempts: list.filter((e) => e.type === 'feed' && e.attempt).length,
     bottles: list.filter((e) => e.type === 'bottle').length,
+    pumps: list.filter((e) => e.type === 'pump' && e.end).length,
+    pumpOz: +list.filter((e) => e.type === 'pump' && e.end).reduce((t, e) => t + (+e.oz || 0), 0).toFixed(1),
     wet: list.filter((e) => e.type === 'diaper' && (e.kind === 'wet' || e.kind === 'both')).length,
     dirty: list.filter((e) => e.type === 'diaper' && (e.kind === 'dirty' || e.kind === 'both')).length,
   };
@@ -287,6 +342,7 @@ function daySummary(list, showDiapers) {
   const parts = [`${c.feeds} feed${c.feeds === 1 ? '' : 's'}`];
   if (c.attempts) parts.push(`${c.attempts} attempt${c.attempts === 1 ? '' : 's'}`);
   if (c.bottles) parts.push(`${c.bottles} bottle${c.bottles === 1 ? '' : 's'}`);
+  if (c.pumps) parts.push(`${c.pumps} pump${c.pumps === 1 ? '' : 's'}${c.pumpOz ? ` (${c.pumpOz} oz)` : ''}`);
   if (showDiapers) parts.push(`${c.wet} wet`, `${c.dirty} dirty`);
   return parts.join(' · ');
 }
@@ -311,10 +367,29 @@ function renderHistory(d) {
     const dateTxt = title === 'Today' || title === 'Yesterday' ? new Date(k).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) : '';
     h += `<section class="card"><div class="card-head"><h2>${title}</h2><span class="stat">${[dateTxt, n && n > 0 ? `Day ${n}` : ''].filter(Boolean).join(' · ')}</span></div>
       <div class="minis ${d.settings.showDiapers ? '' : 'two'}">${stat(c.feeds, c.feeds === 1 ? 'feed' : 'feeds', 'f')}${stat(c.bottles || '–', c.bottles === 1 ? 'bottle' : 'bottles', 'b')}${d.settings.showDiapers ? stat(c.wet, 'wet', 'w') + stat(c.dirty, 'dirty', 'd') : ''}</div>
+      ${c.pumps ? `<div class="pump-line">${icons.pump} Pumped ${c.pumps} time${c.pumps === 1 ? '' : 's'}${c.pumpOz ? ` · ${c.pumpOz} oz` : ''}</div>` : ''}
       ${timeline(list, d)}</section>`;
   }
   if (keys.length > ui.histDays) h += `<button class="btn soft full" data-act="more-history">Show earlier days</button>`;
   return h;
+}
+
+function pumpSettings(d) {
+  const { plan, every } = pumpPlan(d.settings);
+  const days = ageDays(d.settings.birthday);
+  const band = bandFor(days);
+  const seg = [['off', 'Off'], ['stash', 'Building a stash'], ['exclusive', 'Exclusively']]
+    .map(([v, l]) => `<button data-act="pump-plan" data-val="${v}" class="${plan === v ? 'on' : ''}">${l}</button>`).join('');
+  let more = '';
+  if (plan === 'stash') more = `<p class="hint">One session a day, about 30 minutes after her first morning feed, when supply is highest. The card on Today shows when.</p>`;
+  if (plan === 'exclusive') {
+    more = `<div class="seg-label" style="margin-top:14px">How often</div>
+      <div class="chips tight">${[[0, `Auto · ${fmtHrs(band.every)}h`], [2, '2h'], [2.5, '2½h'], [3, '3h'], [3.5, '3½h'], [4, '4h'], [5, '5h']]
+        .map(([v, l]) => `<button data-act="pump-every" data-val="${v}" class="${every === v ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <p class="hint">Auto follows her age${days != null ? `. Right now (${band.label}): ${band.text}` : '. Add her birthday above to use it.'}</p>`;
+  }
+  return `<section class="card form"><div class="seg seg-pump">${seg}</div>${more}
+    <button class="text-btn" data-act="pump-guide">Pumping guide ${icons.chevron}</button></section>`;
 }
 
 function renderSettings(d) {
@@ -337,6 +412,8 @@ function renderSettings(d) {
     ${tog('showMeds', 'Medicine timer', icons.pill)}
     ${tog('showVerses', 'Verse of the day', icons.book)}
   </section>
+  <div class="group-label">Pumping</div>
+  ${pumpSettings(d)}
   <div class="group-label">Medicine</div>
   <section class="card form">
     <div class="med-edit head"><span>Name</span><span>Hours apart</span><span></span></div>
@@ -456,7 +533,7 @@ function tick() {
   if (ui.tab === 'home') {
     const r = running(d);
     const readyKey = d.settings.meds.map((m) => medStatus(d, m, now).ready).join()
-      + (r ? now - r.segs[r.segs.length - 1].a > 45 * MIN : '') + isNight();
+      + (r ? now - r.segs[r.segs.length - 1].a > 45 * MIN : '') + isNight() + nextPump(d, now).state;
     if (lastMedReady !== null && readyKey !== lastMedReady) render();
     lastMedReady = readyKey;
   }
@@ -464,6 +541,7 @@ function tick() {
 
 // ---------- sheets & toast ----------
 function openSheet(html) {
+  hideToast();
   $sheet.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"><div class="grabber"></div>${html.replace('<h2>', '<h2 id="sheet-title">')}</div>`;
   $sheet.hidden = false;
   document.body.classList.add('locked');
@@ -527,6 +605,12 @@ function editSheet(e) {
     fields = `${e.end ? `<div class="field"><span>What happened</span>${chipGroup('fkind', [['feed', 'Fed'], ['attempt', 'Attempt only']], ui.form.fkind)}</div>` : ''}${nudges('f-start')}<label class="field"><span>Started</span><input type="datetime-local" id="f-start" value="${toLocalInput(e.start)}"></label>
       ${e.end ? `<label class="field"><span>Length (minutes)</span><input id="f-len" inputmode="numeric" value="${Math.round(feedDur(e) / MIN)}"></label>
       <label class="field"><span>Sides</span><select id="f-sides">${opt('L', 'Left')}${opt('R', 'Right')}${opt('LR', 'Left, then Right')}${opt('RL', 'Right, then Left')}${knownSides ? '' : `<option value="" selected>Several switches (keep)</option>`}</select></label>` : ''}`;
+  } else if (e.type === 'pump') {
+    ui.form = { pside: e.side || 'both' };
+    fields = `${nudges('f-start')}<label class="field"><span>Started</span><input type="datetime-local" id="f-start" value="${toLocalInput(e.start)}"></label>
+      ${e.end ? `<label class="field"><span>Length (minutes)</span><input id="f-len" inputmode="numeric" value="${Math.round((e.end - e.start) / MIN)}"></label>
+      <label class="field"><span>Amount (oz)</span><input id="f-oz" inputmode="decimal" value="${esc(e.oz || '')}"></label>
+      <div class="field"><span>Sides</span>${chipGroup('pside', [['both', 'Both'], ['L', 'Left'], ['R', 'Right']], ui.form.pside)}</div>` : ''}`;
   } else {
     fields = `${nudges('f-at')}<label class="field"><span>Time</span><input type="datetime-local" id="f-at" value="${toLocalInput(e.at)}"></label>`;
     if (e.type === 'bottle') fields += `<label class="field"><span>Ounces</span><input id="f-oz" inputmode="decimal" value="${esc(e.oz || '')}"></label>`;
@@ -535,7 +619,7 @@ function editSheet(e) {
       fields += `<label class="field"><span>Kind</span><select id="f-kind">${o('wet', 'Wet')}${o('dirty', 'Dirty')}${o('both', 'Wet + dirty')}</select></label>`;
     }
   }
-  const title = e.attempt ? 'Feeding attempt' : { feed: 'Feed', bottle: 'Bottle', diaper: 'Diaper', med: 'Medicine' }[e.type];
+  const title = e.attempt ? 'Feeding attempt' : { feed: 'Feed', bottle: 'Bottle', diaper: 'Diaper', med: 'Medicine', pump: 'Pumping' }[e.type];
   openSheet(`<h2>${title}</h2>${fields}
     <div class="actions">
       <button class="btn primary" data-act="save-edit" data-id="${esc(e.id)}">Save</button>
@@ -615,7 +699,7 @@ applyTheme();
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
 
 // ---------- push notifications (per phone) ----------
-const pushDefaults = { on: false, med: true, feed: true, feedHours: 3, forgotten: true };
+const pushDefaults = { on: false, med: true, feed: true, feedHours: 3, forgotten: true, pump: true };
 function pushPrefs() { try { return { ...pushDefaults, ...JSON.parse(localStorage.getItem('mt.push') || '{}') }; } catch { return { ...pushDefaults }; } }
 function savePushPrefs(p) { try { localStorage.setItem('mt.push', JSON.stringify(p)); } catch {} }
 function deviceId() {
@@ -648,7 +732,7 @@ async function pushRegister(p) {
     sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uBytes(key) });
   }
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  await pushPost('/register', { subscription: sub.toJSON(), prefs: { med: p.med, feed: p.feed, feedHours: p.feedHours, forgotten: p.forgotten, tz } });
+  await pushPost('/register', { subscription: sub.toJSON(), prefs: { med: p.med, feed: p.feed, feedHours: p.feedHours, forgotten: p.forgotten, pump: p.pump, tz } });
 }
 let pushSaveTimer;
 function pushPrefsChanged(p) {
@@ -673,9 +757,39 @@ function pushSection() {
       ${tog('feed', 'Feed reminder', icons.clock, `${p.feedHours} hours after the last feed started`)}
       ${p.feed ? `<div class="chips tight hours">${[2, 2.5, 3, 3.5, 4].map((h) => `<button data-act="push-hours" data-val="${h}" class="${p.feedHours === h ? 'on' : ''}">${h}h</button>`).join('')}</div>` : ''}
       ${tog('forgotten', 'Forgotten timer', icons.egg, 'If a side runs 45 minutes')}
+      ${pumpPlan(store.data.settings).plan !== 'off' ? tog('pump', 'Pump reminder', icons.pump, 'When it’s time to pump') : ''}
     </div>
     <div class="push-actions"><button class="btn soft" data-act="push-test">Send a test</button><button class="btn ghost-danger" data-act="push-off">Turn off</button></div>`;
   return `<div class="group-label">Notifications · this phone</div><section class="card form">${body}</section>`;
+}
+
+// ---------- pumping sheets ----------
+const OZ_CHIPS = [['1', '1'], ['2', '2'], ['3', '3'], ['4', '4'], ['5', '5'], ['6', '6'], ['8', '8']];
+function pumpAmountFields() {
+  return `<div class="field"><span>How much? (oz, both sides together)</span>${chipGroup('poz', OZ_CHIPS.map(([v, l]) => [v, `${l} oz`]), '')}</div>
+    <label class="field"><span>Or type an amount</span><input id="p-oz" inputmode="decimal" placeholder="e.g. 3.5"></label>
+    <div class="field"><span>Sides</span>${chipGroup('pside', [['both', 'Both'], ['L', 'Left'], ['R', 'Right']], 'both')}</div>`;
+}
+function readPumpAmount() {
+  const typed = document.getElementById('p-oz')?.value.trim().replace(',', '.');
+  return typed || ui.form.poz || '';
+}
+function pumpGuideSheet() {
+  const d = store.data;
+  const days = ageDays(d.settings.birthday);
+  const band = bandFor(days);
+  openSheet(`<h2>Pumping guide</h2>
+    <div class="guide">
+      <h3>Exclusively pumping</h3>
+      <ul class="bands">${AGE_BANDS.map((b) => `<li class="${days != null && b === band ? 'now' : ''}"><b>${b.label}</b><span>${b.text}</span>${days != null && b === band ? '<em>Grace now</em>' : ''}</li>`).join('')}</ul>
+      <p>Each session usually takes about 15–20 minutes. Pumping both sides at once saves time.</p>
+      <h3>Pumping while breastfeeding</h3>
+      <p>If breastfeeding is going well, many lactation experts suggest waiting until about 3–4 weeks before adding pumping, since pumping a lot early can cause oversupply. Then add one session a day after a morning feed, when supply is usually highest. Starting about 3–4 weeks before going back to work gives time to build a small stash.</p>
+      <h3>Storing milk</h3>
+      <table class="storage">${STORAGE.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('')}</table>
+      <p class="fine-print">General guidance for healthy, full-term babies from the CDC, the AAP (HealthyChildren.org), Solid Starts, Healthline and lactation sources. Every baby and body is different: her doctor or a lactation consultant can tailor this.</p>
+    </div>
+    <div class="actions"><button class="btn soft" data-act="close">Close</button></div>`);
 }
 
 // ---------- actions ----------
@@ -814,6 +928,15 @@ const actions = {
           n.end = last.b;
         }
       }
+    } else if (e.type === 'pump') {
+      const start = fromLocalInput(document.getElementById('f-start').value);
+      const len = e.end ? (parseInt(document.getElementById('f-len').value, 10) || Math.round((e.end - e.start) / MIN)) : 0;
+      if (start) n.start = start;
+      if (e.end) {
+        n.end = n.start + Math.max(1, len) * MIN;
+        n.oz = document.getElementById('f-oz').value.trim().replace(',', '.');
+        n.side = ui.form.pside || 'both';
+      }
     } else {
       const at = fromLocalInput(document.getElementById('f-at').value);
       if (at) n.at = at;
@@ -895,6 +1018,60 @@ const actions = {
     } catch {}
     toast('Notifications are off on this phone');
   },
+  'pump-start': () => {
+    if (store.data.entries.some((e) => e.type === 'pump' && !e.end)) return;
+    const id = uid();
+    store.put('entries', { id, type: 'pump', start: Date.now(), end: null, side: 'both' });
+    toast('Pumping started', () => store.del('entries', id));
+  },
+  'pump-cancel': () => {
+    const r = store.data.entries.find((e) => e.type === 'pump' && !e.end);
+    if (!r) return;
+    store.del('entries', r.id);
+    toast('Pumping cancelled', () => store.put('entries', r));
+  },
+  'pump-stop': () => {
+    const r = store.data.entries.find((e) => e.type === 'pump' && !e.end);
+    if (!r) return;
+    const end = Date.now();
+    ui.form = { poz: '', pside: 'both' };
+    ui.pumpStop = { id: r.id, end };
+    openSheet(`<h2>How much did you pump?</h2><p class="sheet-body">${fmtHM(end - r.start)} session, started at ${fmtTime(r.start)}.</p>${pumpAmountFields()}
+      <div class="actions"><button class="btn primary" data-act="pump-save-run">Save</button><button class="btn soft" data-act="pump-save-run" data-skip="1">Save without amount</button></div>`);
+  },
+  'pump-save-run': ({ skip }) => {
+    const r = store.data.entries.find((e) => e.id === ui.pumpStop?.id);
+    if (!r) return closeSheet();
+    const done = { ...r, end: ui.pumpStop.end, oz: skip ? '' : readPumpAmount(), side: ui.form.pside || 'both' };
+    closeSheet();
+    ui.hopUntil = Date.now() + 600;
+    store.put('entries', done);
+    toast(`Pump saved${done.oz ? ` · ${fmtOz(done.oz)}` : ''}`, () => store.put('entries', r));
+  },
+  'pump-log': () => {
+    ui.form = { pago: '0', plen: '15', poz: '', pside: 'both' };
+    openSheet(`<h2>Log a pump</h2>
+      <div class="field"><span>Finished</span>${chipGroup('pago', [['0', 'Just now'], ['30', '30m ago'], ['60', '1h ago'], ['120', '2h ago'], ['other', 'Other…']], '0')}</div>
+      <label class="field" id="pago-other" hidden><span>Start time</span><input type="datetime-local" id="pl-start" value="${toLocalInput(Date.now() - 20 * MIN)}"></label>
+      <div class="field"><span>How long</span>${chipGroup('plen', [['10', '10m'], ['15', '15m'], ['20', '20m'], ['30', '30m']], '15')}</div>
+      ${pumpAmountFields()}
+      <div class="actions"><button class="btn primary" data-act="pump-save-log">Save</button><button class="btn soft" data-act="close">Cancel</button></div>`);
+  },
+  'pump-save-log': () => {
+    const f = ui.form;
+    const len = (+f.plen || 15) * MIN;
+    // The time chips say when she finished; "Other…" asks for the start time.
+    const start = f.pago === 'other' ? fromLocalInput(document.getElementById('pl-start').value) : Date.now() - (+f.pago || 0) * MIN - len;
+    if (!start) return;
+    const e = { id: uid(), type: 'pump', start, end: start + len, oz: readPumpAmount(), side: f.pside || 'both' };
+    closeSheet();
+    ui.hopUntil = Date.now() + 600;
+    store.put('entries', e);
+    toast(`Pump logged${e.oz ? ` · ${fmtOz(e.oz)}` : ''}`, () => store.del('entries', e.id));
+  },
+  'pump-guide': () => pumpGuideSheet(),
+  'pump-plan': ({ val }) => { store.set({ pump: { ...pumpPlan(store.data.settings), plan: val } }); render(); },
+  'pump-every': ({ val }) => { store.set({ pump: { ...pumpPlan(store.data.settings), every: +val } }); render(); },
   theme: ({ val }) => {
     try { localStorage.setItem('mt.theme', val); } catch {}
     applyTheme();

@@ -19,6 +19,7 @@ export function defaultData() {
       showMeds: true,
       meds: [{ id: 'ibuprofen', name: 'Ibuprofen', hours: 6 }],
       msgPin: '',
+      pump: { plan: 'off', every: 0 },
     },
     entries: [],
     messages: [],

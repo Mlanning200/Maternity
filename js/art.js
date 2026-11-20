@@ -41,6 +41,8 @@ export const icons = {
   clock: I('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
   pill: I('<path d="M10.3 20.2a5 5 0 0 1-7-7l6.4-6.4a5 5 0 0 1 7 7z"/><path d="M6.5 10l7.5 7.5"/>'),
   bell: I('<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2.2 2.2 0 0 0 4 0"/>'),
+  pump: I('<path d="M6.5 3h11l-3.5 4.5v1.5h-4V7.5z"/><rect x="8" y="9" width="8" height="12" rx="2.2"/><path d="M8 13.5h3M8 16.5h3"/>'),
+  check: I('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
   plus: I('<path d="M12 5v14M5 12h14"/>'),
   chevron: I('<path d="M9 6l6 6-6 6"/>'),
   back: I('<path d="M15 6l-6 6 6 6"/>'),
