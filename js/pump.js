@@ -4,10 +4,11 @@
 //  - Exclusive pumping: 8–12 sessions per 24 h for a newborn, including overnight, ~15–20 min each.
 //    By age: every 2–3 h at 0–2 months, every 3–4 h at 3–6 months, every 3–5 h at 7–12 months.
 //    (Solid Starts pumping schedules guide; Healthline; WebMD)
-//  - Pumping while breastfeeding: wait until breastfeeding is going well (about 3–4 weeks), then add one
-//    session a day after a morning feed, when supply is highest. (The Lactation Network; Akron Children's)
+//  - Breastfeeding + pumping (e.g. to rest sore nipples): milk should still be removed about as often as a
+//    newborn feeds (8–12 times a day), so when a bottle replaces a breastfeed, pump around that time.
+//    The reminder fires when neither a breastfeed nor a pump has happened for the chosen number of hours.
 //  - Storage (CDC): 4 h room temp, 4 days fridge, ~6 months freezer (12 max); thawed milk within 24 h.
-// push/worker.js mirrors pumpEvery() and the stash rule, so keep them in step.
+// push/worker.js mirrors pumpEvery() and the breast + pump rule, so keep them in step.
 
 const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 
@@ -27,7 +28,9 @@ export const STORAGE = [
 
 export function pumpPlan(settings) {
   const p = settings.pump || {};
-  return { plan: ['stash', 'exclusive'].includes(p.plan) ? p.plan : 'off', every: +p.every > 0 ? +p.every : 0 };
+  // 'stash' was an earlier option; it is now part of Breast + pump.
+  const plan = p.plan === 'exclusive' ? 'exclusive' : (p.plan === 'combo' || p.plan === 'stash') ? 'combo' : 'off';
+  return { plan, every: +p.every > 0 ? +p.every : 0, after: +p.after > 0 ? +p.after : 3 };
 }
 
 /** Days since birth (0 on the birthday), or null without a birthday. */
@@ -68,12 +71,12 @@ export function nextPump(data, now = Date.now()) {
     return { state: now >= at ? 'due' : 'later', at, last, every };
   }
 
-  // Building a stash: one session a day, a little after the first morning feed.
-  const today = pumps.filter((e) => e.start >= +dayStart);
-  if (today.length) return { state: 'done', today };
-  const morning = +dayStart + 4 * HOUR;
-  const firstFeed = data.entries.filter((e) => isRealFeed(e) && e.start >= morning).sort((a, b) => a.start - b.start)[0];
-  if (!firstFeed) return { state: 'after-feed', last };
-  const at = firstFeed.end + 30 * MIN;
-  return { state: now >= at ? 'due' : 'later', at, last, feed: firstFeed };
+  // Breast + pump: remind when her breasts have gone this long without a breastfeed or a pump.
+  const { after } = pumpPlan(data.settings);
+  const lastFeed = data.entries.filter((e) => isRealFeed(e) || (e.type === 'feed' && !e.end)).sort((a, b) => b.start - a.start)[0];
+  const lastAt = Math.max(lastFeed?.start || 0, last?.start || 0);
+  if (!lastAt) return { state: 'idle' };
+  const lastKind = last && last.start === lastAt ? 'pumped' : 'nursed';
+  const at = lastAt + after * HOUR;
+  return { state: now >= at ? 'due' : 'later', at, last, lastAt, lastKind, after };
 }

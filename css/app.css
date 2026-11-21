@@ -482,3 +482,11 @@ body.locked { overflow: hidden; }
 .storage th { font-weight: 900; width: 42%; }
 .storage td { font-weight: 600; color: var(--muted); }
 .fine-print { font-size: 12px !important; color: var(--muted); }
+
+.pump-go { margin-top: 16px; min-height: 56px; }
+.pump-links { display: flex; justify-content: space-between; gap: 10px; }
+.pump-links .text-btn { color: var(--muted); }
+.pump-links .text-btn .ico { width: 16px; height: 16px; }
+.seg.seg-pump { grid-template-columns: .6fr 1.4fr 1.3fr; }
+.quick.three { grid-template-columns: repeat(3, 1fr); }
+.quick.three button { flex-direction: column; gap: 4px; padding: 10px 4px; }

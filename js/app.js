@@ -12,7 +12,7 @@ const $toast = document.getElementById('toast');
 $nav.innerHTML = [['home', 'egg', 'Today'], ['history', 'calendar', 'History'], ['settings', 'settings', 'Settings']]
   .map(([t, i, l]) => `<button data-act="tab" data-tab="${t}">${icons[i]}<span>${l}</span></button>`).join('');
 
-const APP_VERSION = '2.9';
+const APP_VERSION = '3.0';
 // The notification sender (a Cloudflare Worker, see push/worker.js).
 const PUSH_URL = 'https://lil-chicken-push.lilchicken-7535ca94.workers.dev';
 const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
@@ -222,9 +222,10 @@ function feedCard(d, now) {
   return `<section class="card hero">
     ${since}
     <div class="eggs ${next ? 'has-next' : ''}">${egg('L')}${egg('R')}</div>
-    <div class="quick">
+    <div class="quick ${pumpPlan(d.settings).plan !== 'off' ? 'three' : ''}">
       <button data-act="bottle">${icons.bottle}<span>Bottle</span></button>
-      <button data-act="past-feed">${icons.clock}<span>Add past feed</span></button>
+      ${pumpPlan(d.settings).plan !== 'off' ? `<button data-act="pump-start">${icons.pump}<span>Pump</span></button>` : ''}
+      <button data-act="past-feed">${icons.clock}<span>${pumpPlan(d.settings).plan !== 'off' ? 'Past feed' : 'Add past feed'}</span></button>
     </div>
   </section>`;
 }
@@ -286,40 +287,35 @@ function pumpCard(d, now) {
     </section>`;
   }
   const { plan } = pumpPlan(d.settings);
-  const lastTxt = np.last ? `last at ${fmtTime(np.last.start)}${np.last.oz ? `, ${fmtOz(np.last.oz)}` : ''}` : '';
+  const lastPump = np.last ? `Last pumped ${fmtTime(np.last.start)}${np.last.oz ? `, ${fmtOz(np.last.oz)}` : ''}` : 'No pumps logged yet';
   let big, sub, cls = '';
   if (np.state === 'due') {
     cls = 'due';
-    big = plan === 'stash' ? 'Good time to pump' : 'Time to pump';
-    sub = plan === 'stash' ? `Her first feed today ended at ${fmtTime(np.feed.end)}`
+    big = 'Time to pump';
+    sub = plan === 'combo'
+      ? `<span data-ago="${np.lastAt}">${fmtHM(now - np.lastAt)}</span> since she last ${np.lastKind}`
       : np.last ? `It’s been <span data-ago="${np.last.start}">${fmtHM(now - np.last.start)}</span> since the last pump` : 'No pumps logged yet';
   } else if (np.state === 'later') {
-    big = `Next pump around ${fmtTime(np.at)}`;
-    sub = `in <span data-countdown="${np.at}">${fmtHM(np.at - now + MIN - 1)}</span>${lastTxt ? ` · ${lastTxt}` : ''}`;
-  } else if (np.state === 'after-feed') {
-    big = 'After her first morning feed';
-    sub = 'Milk supply is usually highest in the morning';
+    big = plan === 'combo' ? `Pump around ${fmtTime(np.at)}` : `Next pump around ${fmtTime(np.at)}`;
+    sub = plan === 'combo' ? `if she doesn’t nurse before then · ${lastPump}` : `in <span data-countdown="${np.at}">${fmtHM(np.at - now + MIN - 1)}</span> · ${lastPump}`;
   } else {
-    cls = 'done';
-    big = 'Done for today';
-    sub = `${oz ? `${+oz.toFixed(1)} oz` : 'Pumped'} for the stash`;
+    big = 'Ready when she is';
+    sub = 'Tap Start pumping when she begins';
   }
-  const days = ageDays(d.settings.birthday, now);
-  const early = plan === 'stash' && days != null && days < 21
-    ? `<p class="pump-note">Many lactation experts suggest waiting until about 3–4 weeks, once breastfeeding is going well, unless her doctor says otherwise.</p>` : '';
   return `<section class="card pump-card ${cls}">${head}
-    <div class="pump-status"><span class="pump-ico">${np.state === 'done' ? icons.check : icons.pump}</span>
+    <div class="pump-status"><span class="pump-ico">${icons.pump}</span>
       <div><div class="pump-big">${big}</div><div class="pump-sub">${sub}</div></div></div>
-    ${early}
-    <div class="pump-actions"><button class="btn ${np.state === 'due' ? 'primary' : 'soft'}" data-act="pump-start">${icons.pump} Start pumping</button><button class="btn soft" data-act="pump-log">${icons.plus} Log</button></div>
-    <button class="text-btn" data-act="pump-guide">Pumping guide ${icons.chevron}</button>
+    <button class="btn primary full pump-go" data-act="pump-start">${icons.pump} Start pumping</button>
+    <div class="pump-links"><button class="text-btn" data-act="pump-log">${icons.plus} Log a past pump</button><button class="text-btn" data-act="pump-guide">Guide ${icons.chevron}</button></div>
   </section>`;
 }
 
 function renderHome(d) {
   const now = Date.now();
   const s = d.settings;
-  return header(d) + feedCard(d, now) + pumpCard(d, now)
+  // While she is pumping, the pump timer goes to the top where her thumb is.
+  const pumping = d.entries.some((e) => e.type === 'pump' && !e.end);
+  return header(d) + (pumping ? pumpCard(d, now) + feedCard(d, now) : feedCard(d, now) + pumpCard(d, now))
     + (s.showDiapers ? diaperCard(d, now) : '')
     + todaysNote(d)
     + (s.showMeds && s.meds.length ? medsCard(d, now) : '')
@@ -375,13 +371,17 @@ function renderHistory(d) {
 }
 
 function pumpSettings(d) {
-  const { plan, every } = pumpPlan(d.settings);
+  const { plan, every, after } = pumpPlan(d.settings);
   const days = ageDays(d.settings.birthday);
   const band = bandFor(days);
-  const seg = [['off', 'Off'], ['stash', 'Building a stash'], ['exclusive', 'Exclusively']]
+  const seg = [['off', 'Off'], ['combo', 'Breast + pump'], ['exclusive', 'Only pumping']]
     .map(([v, l]) => `<button data-act="pump-plan" data-val="${v}" class="${plan === v ? 'on' : ''}">${l}</button>`).join('');
   let more = '';
-  if (plan === 'stash') more = `<p class="hint">One session a day, about 30 minutes after her first morning feed, when supply is highest. The card on Today shows when.</p>`;
+  if (plan === 'combo') {
+    more = `<div class="seg-label" style="margin-top:14px">Remind her to pump after</div>
+      <div class="chips tight">${[2, 2.5, 3, 3.5, 4].map((v) => `<button data-act="pump-after" data-val="${v}" class="${after === v ? 'on' : ''}">${fmtHrs(v)}h</button>`).join('')}</div>
+      <p class="hint">…with no breastfeed or pump. Nursing resets it. When Grace gets a bottle instead, pumping around then keeps her supply up.</p>`;
+  }
   if (plan === 'exclusive') {
     more = `<div class="seg-label" style="margin-top:14px">How often</div>
       <div class="chips tight">${[[0, `Auto · ${fmtHrs(band.every)}h`], [2, '2h'], [2.5, '2½h'], [3, '3h'], [3.5, '3½h'], [4, '4h'], [5, '5h']]
@@ -757,7 +757,7 @@ function pushSection() {
       ${tog('feed', 'Feed reminder', icons.clock, `${p.feedHours} hours after the last feed started`)}
       ${p.feed ? `<div class="chips tight hours">${[2, 2.5, 3, 3.5, 4].map((h) => `<button data-act="push-hours" data-val="${h}" class="${p.feedHours === h ? 'on' : ''}">${h}h</button>`).join('')}</div>` : ''}
       ${tog('forgotten', 'Forgotten timer', icons.egg, 'If a side runs 45 minutes')}
-      ${pumpPlan(store.data.settings).plan !== 'off' ? tog('pump', 'Pump reminder', icons.pump, 'When it’s time to pump') : ''}
+      ${pumpPlan(store.data.settings).plan !== 'off' ? tog('pump', 'Pump reminder', icons.pump, 'When it’s been a while without nursing or pumping') : ''}
     </div>
     <div class="push-actions"><button class="btn soft" data-act="push-test">Send a test</button><button class="btn ghost-danger" data-act="push-off">Turn off</button></div>`;
   return `<div class="group-label">Notifications · this phone</div><section class="card form">${body}</section>`;
@@ -783,8 +783,8 @@ function pumpGuideSheet() {
       <h3>Exclusively pumping</h3>
       <ul class="bands">${AGE_BANDS.map((b) => `<li class="${days != null && b === band ? 'now' : ''}"><b>${b.label}</b><span>${b.text}</span>${days != null && b === band ? '<em>Grace now</em>' : ''}</li>`).join('')}</ul>
       <p>Each session usually takes about 15–20 minutes. Pumping both sides at once saves time.</p>
-      <h3>Pumping while breastfeeding</h3>
-      <p>If breastfeeding is going well, many lactation experts suggest waiting until about 3–4 weeks before adding pumping, since pumping a lot early can cause oversupply. Then add one session a day after a morning feed, when supply is usually highest. Starting about 3–4 weeks before going back to work gives time to build a small stash.</p>
+      <h3>Breastfeeding and pumping</h3>
+      <p>Pumping some feeds can give sore nipples a rest. A newborn's milk needs to be removed about 8–12 times a day, so when Grace has a bottle instead of the breast, pumping around that time helps keep supply up. Many lactation experts suggest waiting until about 3–4 weeks to add regular extra pumping, since pumping a lot early can cause oversupply, but resting sore nipples is a good reason to pump sooner. If soreness continues, a lactation consultant can check her latch.</p>
       <h3>Storing milk</h3>
       <table class="storage">${STORAGE.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('')}</table>
       <p class="fine-print">General guidance for healthy, full-term babies from the CDC, the AAP (HealthyChildren.org), Solid Starts, Healthline and lactation sources. Every baby and body is different: her doctor or a lactation consultant can tailor this.</p>
@@ -1071,6 +1071,7 @@ const actions = {
   },
   'pump-guide': () => pumpGuideSheet(),
   'pump-plan': ({ val }) => { store.set({ pump: { ...pumpPlan(store.data.settings), plan: val } }); render(); },
+  'pump-after': ({ val }) => { store.set({ pump: { ...pumpPlan(store.data.settings), after: +val } }); render(); },
   'pump-every': ({ val }) => { store.set({ pump: { ...pumpPlan(store.data.settings), every: +val } }); render(); },
   theme: ({ val }) => {
     try { localStorage.setItem('mt.theme', val); } catch {}

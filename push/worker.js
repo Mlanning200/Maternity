@@ -172,7 +172,7 @@ export function dueAlerts(data, devices, now) {
       out.push({ id, msg: { title: 'Time for a feed?', body: `${p.feedHours} hours since the last feed started at ${fmtTime(lastFeedAt, p.tz)}.${next}`, tag: 'feed' } });
     }
     const plan = (settings.pump || {}).plan;
-    if (p.pump && (plan === 'exclusive' || plan === 'stash')) {
+    if (p.pump && (plan === 'exclusive' || plan === 'combo' || plan === 'stash')) {
       const pumps = entries.filter((e) => e.type === 'pump').sort((a, b) => b.start - a.start);
       if (!pumps.some((e) => !e.end)) {
         if (plan === 'exclusive' && pumps[0]) {
@@ -181,14 +181,14 @@ export function dueAlerts(data, devices, now) {
             out.push({ id, msg: { title: 'Time to pump', body: `It’s been ${Math.floor(every)}${every % 1 ? '½' : ''} hours since the last pump at ${fmtTime(pumps[0].start, p.tz)}.`, tag: 'pump' } });
           }
         }
-        if (plan === 'stash') {
-          const today = localParts(now, p.tz).date;
-          const pumpedToday = pumps.some((e) => localParts(e.start, p.tz).date === today);
-          const first = entries.filter((e) => e.type === 'feed' && e.end && !e.attempt)
-            .filter((e) => { const lp = localParts(e.start, p.tz); return lp.date === today && lp.hour >= 4; })
-            .sort((a, b) => a.start - b.start)[0];
-          if (!pumpedToday && first && inWindow(first.end + 30 * MIN)) {
-            out.push({ id, msg: { title: 'Good time to pump', body: `Her first feed today ended at ${fmtTime(first.end, p.tz)}. Morning is when supply is highest.`, tag: 'pump' } });
+        if (plan === 'combo' || plan === 'stash') {
+          // Breast + pump: no breastfeed and no pump for `after` hours. Mirrors js/pump.js.
+          const after = +(settings.pump || {}).after > 0 ? +settings.pump.after : 3;
+          const lastNurse = entries.filter((e) => e.type === 'feed' && !e.attempt).sort((a, b) => b.start - a.start)[0];
+          const lastAt = Math.max(lastNurse?.start || 0, pumps[0]?.start || 0);
+          if (lastAt && !running && inWindow(lastAt + after * HOUR)) {
+            const what = pumps[0] && pumps[0].start === lastAt ? 'pumped' : 'nursed';
+            out.push({ id, msg: { title: 'Time to pump?', body: `It’s been ${Math.floor(after)}${after % 1 ? '½' : ''} hours since she last ${what} (${fmtTime(lastAt, p.tz)}).`, tag: 'pump' } });
           }
         }
       }
