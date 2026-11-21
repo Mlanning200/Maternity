@@ -12,7 +12,7 @@ const $toast = document.getElementById('toast');
 $nav.innerHTML = [['home', 'egg', 'Today'], ['history', 'calendar', 'History'], ['settings', 'settings', 'Settings']]
   .map(([t, i, l]) => `<button data-act="tab" data-tab="${t}">${icons[i]}<span>${l}</span></button>`).join('');
 
-const APP_VERSION = '3.0';
+const APP_VERSION = '3.1';
 // The notification sender (a Cloudflare Worker, see push/worker.js).
 const PUSH_URL = 'https://lil-chicken-push.lilchicken-7535ca94.workers.dev';
 const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
@@ -216,17 +216,20 @@ function feedCard(d, now) {
       <div class="since-meta">${meta}</div>
       ${lastAttempt && lastAttempt.start > lastAny ? `<div class="since-attempt">Attempt at ${fmtTime(lastAttempt.start)} · ${sideName(lastSide(lastAttempt))}</div>` : ''}</div>`;
   }
+  const np = nextPump(d, now);
+  const pumpOn = np.state !== 'off';
   const egg = (s) => `<button class="egg ${s} ${next === s ? 'next' : ''}" data-act="start" data-side="${s}" aria-label="Start feed on ${sideName(s).toLowerCase()} side${next === s ? ' (suggested)' : ''}">
       <span class="sheen"></span>${next === s ? '<span class="next-tag">Start here</span>' : ''}
       <span class="egg-letter">${s}</span><span class="egg-name">${sideName(s)}</span></button>`;
   return `<section class="card hero">
     ${since}
     <div class="eggs ${next ? 'has-next' : ''}">${egg('L')}${egg('R')}</div>
-    <div class="quick ${pumpPlan(d.settings).plan !== 'off' ? 'three' : ''}">
+    <div class="quick ${pumpOn ? 'three' : ''}">
       <button data-act="bottle">${icons.bottle}<span>Bottle</span></button>
-      ${pumpPlan(d.settings).plan !== 'off' ? `<button data-act="pump-start">${icons.pump}<span>Pump</span></button>` : ''}
-      <button data-act="past-feed">${icons.clock}<span>${pumpPlan(d.settings).plan !== 'off' ? 'Past feed' : 'Add past feed'}</span></button>
+      ${pumpOn ? `<button class="${np.state === 'due' ? 'due' : ''}" data-act="pump-start">${icons.pump}<span>Pump</span></button>` : ''}
+      <button data-act="past-feed">${icons.clock}<span>${pumpOn ? 'Past feed' : 'Add past feed'}</span></button>
     </div>
+    ${pumpOn ? pumpLine(np, now) : ''}
   </section>`;
 }
 
@@ -272,50 +275,36 @@ function todayList(d, now) {
   return `<section class="card"><div class="card-head"><h2>Today</h2><span class="stat">${daySummary(list, d.settings.showDiapers)}</span></div>${timeline(list, d)}</section>`;
 }
 
-function pumpCard(d, now) {
-  const np = nextPump(d, now);
-  if (np.state === 'off') return '';
-  const today = d.entries.filter((e) => e.type === 'pump' && e.end && e.start >= startOfDay(now));
-  const oz = today.reduce((t, e) => t + (+e.oz || 0), 0);
-  const head = `<div class="card-head"><h2>Pumping</h2><span class="stat">Today <b>${today.length}</b>${oz ? ` · <b>${+oz.toFixed(1)}</b> oz` : ''}</span></div>`;
-  if (np.state === 'running') {
-    const e = np.entry;
-    return `<section class="card pump-card running-pump">${head}
-      <div class="pump-run"><span class="pump-ico live">${icons.pump}</span>
-        <div><div class="pump-clock" data-clock="${e.start}">${fmtClock(now - e.start)}</div><div class="pump-sub">Pumping since ${fmtTime(e.start)}</div></div></div>
-      <div class="pump-actions"><button class="btn soft" data-act="pump-cancel">Cancel</button><button class="btn primary" data-act="pump-stop">${icons.stop} Done</button></div>
-    </section>`;
-  }
-  const { plan } = pumpPlan(d.settings);
-  const lastPump = np.last ? `Last pumped ${fmtTime(np.last.start)}${np.last.oz ? `, ${fmtOz(np.last.oz)}` : ''}` : 'No pumps logged yet';
-  let big, sub, cls = '';
+/** One line under the feeding buttons: when to pump next. */
+function pumpLine(np, now) {
+  const { plan } = pumpPlan(store.data.settings);
+  let text;
   if (np.state === 'due') {
-    cls = 'due';
-    big = 'Time to pump';
-    sub = plan === 'combo'
-      ? `<span data-ago="${np.lastAt}">${fmtHM(now - np.lastAt)}</span> since she last ${np.lastKind}`
-      : np.last ? `It’s been <span data-ago="${np.last.start}">${fmtHM(now - np.last.start)}</span> since the last pump` : 'No pumps logged yet';
+    text = `<b>Time to pump</b> · ${plan === 'combo' ? `<span data-ago="${np.lastAt}">${fmtHM(now - np.lastAt)}</span> since she last ${np.lastKind}` : np.last ? `<span data-ago="${np.last.start}">${fmtHM(now - np.last.start)}</span> since the last pump` : 'none logged yet'}`;
   } else if (np.state === 'later') {
-    big = plan === 'combo' ? `Pump around ${fmtTime(np.at)}` : `Next pump around ${fmtTime(np.at)}`;
-    sub = plan === 'combo' ? `if she doesn’t nurse before then · ${lastPump}` : `in <span data-countdown="${np.at}">${fmtHM(np.at - now + MIN - 1)}</span> · ${lastPump}`;
+    text = `Pump around <b>${fmtTime(np.at)}</b>${plan === 'combo' ? ' unless she nurses first' : ''}`;
   } else {
-    big = 'Ready when she is';
-    sub = 'Tap Start pumping when she begins';
+    text = 'Tap Pump when she starts pumping';
   }
-  return `<section class="card pump-card ${cls}">${head}
-    <div class="pump-status"><span class="pump-ico">${icons.pump}</span>
-      <div><div class="pump-big">${big}</div><div class="pump-sub">${sub}</div></div></div>
-    <button class="btn primary full pump-go" data-act="pump-start">${icons.pump} Start pumping</button>
-    <div class="pump-links"><button class="text-btn" data-act="pump-log">${icons.plus} Log a past pump</button><button class="text-btn" data-act="pump-guide">Guide ${icons.chevron}</button></div>
+  return `<div class="pump-line-home ${np.state === 'due' ? 'due' : ''}"><span>${text}</span><button class="text-btn" data-act="pump-guide">Guide</button></div>`;
+}
+
+/** Slim timer bar at the top of Today while she is pumping. */
+function pumpBar(d, now) {
+  const e = d.entries.find((x) => x.type === 'pump' && !x.end);
+  if (!e) return '';
+  return `<section class="card pump-bar">
+    <span class="pump-ico live">${icons.pump}</span>
+    <div class="pump-bar-txt"><div class="pump-clock" data-clock="${e.start}">${fmtClock(now - e.start)}</div><div class="pump-sub">Pumping · since ${fmtTime(e.start)}</div></div>
+    <button class="icon-btn" data-act="pump-cancel" aria-label="Cancel pumping">${icons.x}</button>
+    <button class="btn primary" data-act="pump-stop">Done</button>
   </section>`;
 }
 
 function renderHome(d) {
   const now = Date.now();
   const s = d.settings;
-  // While she is pumping, the pump timer goes to the top where her thumb is.
-  const pumping = d.entries.some((e) => e.type === 'pump' && !e.end);
-  return header(d) + (pumping ? pumpCard(d, now) + feedCard(d, now) : feedCard(d, now) + pumpCard(d, now))
+  return header(d) + pumpBar(d, now) + feedCard(d, now)
     + (s.showDiapers ? diaperCard(d, now) : '')
     + todaysNote(d)
     + (s.showMeds && s.meds.length ? medsCard(d, now) : '')
@@ -880,6 +869,7 @@ const actions = {
     const side = lf ? nextSide(lf) : 'L';
     ui.form = { pago: '30', plen: '15', psides: side, pkind: 'feed' };
     openSheet(`<h2>Add a past feed</h2>
+      ${pumpPlan(store.data.settings).plan !== 'off' ? `<button class="text-btn sheet-switch" data-act="pump-log">${icons.pump} Log a past pump instead</button>` : ''}
       <div class="field"><span>What happened</span>${chipGroup('pkind', [['feed', 'Fed'], ['attempt', 'Attempt only']], 'feed')}</div>
       <div class="field"><span>Started</span>${chipGroup('pago', [['15', '15m ago'], ['30', '30m ago'], ['45', '45m ago'], ['60', '1h ago'], ['120', '2h ago'], ['other', 'Other…']], '30')}</div>
       <label class="field" id="pago-other" hidden><span>Start time</span><input type="datetime-local" id="p-start" value="${toLocalInput(Date.now() - 30 * MIN)}"></label>
