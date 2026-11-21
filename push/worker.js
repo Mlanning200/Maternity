@@ -291,18 +291,27 @@ export async function vapidHeader(env, endpoint) {
 
 export async function sendPush(env, sub, msg) {
   const body = await encryptPayload(sub, JSON.stringify(msg));
-  const res = await fetch(sub.endpoint, {
+  // Apple only accepts letters and digits in the Topic label (a dash is refused as BadWebPushTopic).
+  const topic = (msg.tag || 'lc').replace(/[^A-Za-z0-9]/g, '').slice(0, 32);
+  const send = (withTopic) => fetch(sub.endpoint, {
     method: 'POST',
     headers: {
-      Authorization: await vapidHeader(env, sub.endpoint),
+      Authorization: vapid,
       'Content-Encoding': 'aes128gcm',
       'Content-Type': 'application/octet-stream',
       TTL: '3600',
       Urgency: 'high',
-      Topic: (msg.tag || 'lc').replace(/[^\w-]/g, '').slice(0, 32),
+      ...(withTopic && topic ? { Topic: topic } : {}),
     },
     body,
   });
+  const vapid = await vapidHeader(env, sub.endpoint);
+  let res = await send(true);
+  if (res.status === 400) {
+    // If the push service still objects to the label, deliver the alert without it.
+    const text = await res.clone().text().catch(() => '');
+    if (/topic/i.test(text)) res = await send(false);
+  }
   let reason = '';
   if (!res.ok) { try { reason = (await res.text()).slice(0, 200); } catch {} }
   return { ok: res.ok, status: res.status, reason };
