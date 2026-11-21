@@ -12,7 +12,7 @@ const $toast = document.getElementById('toast');
 $nav.innerHTML = [['home', 'egg', 'Today'], ['history', 'calendar', 'History'], ['settings', 'settings', 'Settings']]
   .map(([t, i, l]) => `<button data-act="tab" data-tab="${t}">${icons[i]}<span>${l}</span></button>`).join('');
 
-const APP_VERSION = '3.1';
+const APP_VERSION = '3.2';
 // The notification sender (a Cloudflare Worker, see push/worker.js).
 const PUSH_URL = 'https://lil-chicken-push.lilchicken-7535ca94.workers.dev';
 const MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
@@ -227,7 +227,7 @@ function feedCard(d, now) {
     <div class="quick ${pumpOn ? 'three' : ''}">
       <button data-act="bottle">${icons.bottle}<span>Bottle</span></button>
       ${pumpOn ? `<button class="${np.state === 'due' ? 'due' : ''}" data-act="pump-start">${icons.pump}<span>Pump</span></button>` : ''}
-      <button data-act="past-feed">${icons.clock}<span>${pumpOn ? 'Past feed' : 'Add past feed'}</span></button>
+      <button data-act="past-feed">${icons.clock}<span>${pumpOn ? 'Add past' : 'Add past feed'}</span></button>
     </div>
     ${pumpOn ? pumpLine(np, now) : ''}
   </section>`;
@@ -753,6 +753,10 @@ function pushSection() {
 }
 
 // ---------- pumping sheets ----------
+/** Breastfeed | Pump switch at the top of the Add past sheet (only when pumping is on). */
+const pastSwitch = (active) => (pumpPlan(store.data.settings).plan === 'off' ? '' : `<div class="seg seg-past">
+  <button data-act="past-feed" class="${active === 'feed' ? 'on' : ''}">${icons.egg} Breastfeed</button>
+  <button data-act="pump-log" class="${active === 'pump' ? 'on' : ''}">${icons.pump} Pump</button></div>`);
 const OZ_CHIPS = [['1', '1'], ['2', '2'], ['3', '3'], ['4', '4'], ['5', '5'], ['6', '6'], ['8', '8']];
 function pumpAmountFields() {
   return `<div class="field"><span>How much? (oz, both sides together)</span>${chipGroup('poz', OZ_CHIPS.map(([v, l]) => [v, `${l} oz`]), '')}</div>
@@ -868,8 +872,8 @@ const actions = {
     const lf = store.data.entries.filter(isRealFeed).sort((a, b) => b.start - a.start)[0];
     const side = lf ? nextSide(lf) : 'L';
     ui.form = { pago: '30', plen: '15', psides: side, pkind: 'feed' };
-    openSheet(`<h2>Add a past feed</h2>
-      ${pumpPlan(store.data.settings).plan !== 'off' ? `<button class="text-btn sheet-switch" data-act="pump-log">${icons.pump} Log a past pump instead</button>` : ''}
+    openSheet(`<h2>${pumpPlan(store.data.settings).plan === 'off' ? 'Add a past feed' : 'Add past'}</h2>
+      ${pastSwitch('feed')}
       <div class="field"><span>What happened</span>${chipGroup('pkind', [['feed', 'Fed'], ['attempt', 'Attempt only']], 'feed')}</div>
       <div class="field"><span>Started</span>${chipGroup('pago', [['15', '15m ago'], ['30', '30m ago'], ['45', '45m ago'], ['60', '1h ago'], ['120', '2h ago'], ['other', 'Other…']], '30')}</div>
       <label class="field" id="pago-other" hidden><span>Start time</span><input type="datetime-local" id="p-start" value="${toLocalInput(Date.now() - 30 * MIN)}"></label>
@@ -1038,22 +1042,24 @@ const actions = {
     store.put('entries', done);
     toast(`Pump saved${done.oz ? ` · ${fmtOz(done.oz)}` : ''}`, () => store.put('entries', r));
   },
+  // Log a pump she didn't time: when she finished + how much. Tapping an amount saves.
+  // Length (15 min) and side (both) can be changed later by tapping the entry.
   'pump-log': () => {
-    ui.form = { pago: '0', plen: '15', poz: '', pside: 'both' };
-    openSheet(`<h2>Log a pump</h2>
-      <div class="field"><span>Finished</span>${chipGroup('pago', [['0', 'Just now'], ['30', '30m ago'], ['60', '1h ago'], ['120', '2h ago'], ['other', 'Other…']], '0')}</div>
-      <label class="field" id="pago-other" hidden><span>Start time</span><input type="datetime-local" id="pl-start" value="${toLocalInput(Date.now() - 20 * MIN)}"></label>
-      <div class="field"><span>How long</span>${chipGroup('plen', [['10', '10m'], ['15', '15m'], ['20', '20m'], ['30', '30m']], '15')}</div>
-      ${pumpAmountFields()}
-      <div class="actions"><button class="btn primary" data-act="pump-save-log">Save</button><button class="btn soft" data-act="close">Cancel</button></div>`);
+    ui.form = { pago: '0' };
+    openSheet(`<h2>Add past</h2>
+      ${pastSwitch('pump')}
+      <div class="field"><span>When did she finish?</span>${chipGroup('pago', [['0', 'Just now'], ['30', '30m ago'], ['60', '1h ago'], ['120', '2h ago'], ['other', 'Other…']], '0')}</div>
+      <label class="field" id="pago-other" hidden><span>Finished at</span><input type="datetime-local" id="pl-end" value="${toLocalInput(Date.now() - 60 * MIN)}"></label>
+      <div class="field"><span>How much? Tap to save</span><div class="chips">${['1', '2', '3', '4', '5', '6'].map((o) => `<button class="big-chip" data-act="pump-save-log" data-oz="${o}">${o} oz</button>`).join('')}</div></div>
+      <div class="pin-row"><input id="pl-oz" class="inp" inputmode="decimal" placeholder="Other amount, e.g. 3.5"><button class="btn primary" data-act="pump-save-log">Save</button></div>
+      <div class="actions"><button class="btn soft" data-act="pump-save-log" data-none="1">Save without amount</button></div>`);
   },
-  'pump-save-log': () => {
+  'pump-save-log': ({ oz, none }) => {
     const f = ui.form;
-    const len = (+f.plen || 15) * MIN;
-    // The time chips say when she finished; "Other…" asks for the start time.
-    const start = f.pago === 'other' ? fromLocalInput(document.getElementById('pl-start').value) : Date.now() - (+f.pago || 0) * MIN - len;
-    if (!start) return;
-    const e = { id: uid(), type: 'pump', start, end: start + len, oz: readPumpAmount(), side: f.pside || 'both' };
+    const end = f.pago === 'other' ? fromLocalInput(document.getElementById('pl-end').value) : Date.now() - (+f.pago || 0) * MIN;
+    if (!end) return;
+    const amount = none ? '' : (oz || document.getElementById('pl-oz').value.trim().replace(',', '.'));
+    const e = { id: uid(), type: 'pump', start: end - 15 * MIN, end, oz: amount, side: 'both' };
     closeSheet();
     ui.hopUntil = Date.now() + 600;
     store.put('entries', e);

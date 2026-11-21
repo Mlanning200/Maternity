@@ -509,3 +509,6 @@ body.locked { overflow: hidden; }
 .sheet-switch { margin: -10px 0 12px; color: var(--muted); gap: 6px; }
 .sheet-switch .ico { width: 18px; height: 18px; }
 .pump-bar .pump-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.seg.seg-past { grid-template-columns: 1fr 1fr; margin: -4px 0 18px; }
+.seg.seg-past button { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 46px; font-size: 16px; }
+.seg.seg-past .ico { width: 18px; height: 18px; }
