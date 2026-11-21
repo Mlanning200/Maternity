@@ -58,6 +58,8 @@ export default {
         const dev = state.devices[id];
         if (!dev) return json({ error: 'This phone is not registered yet.' }, 404);
         const r = await sendPush(env, dev.sub, { title: 'Lil Chicken', body: 'Notifications are working on this phone. 🐣', tag: 'test' });
+        const prev = (await env.KV.get('log', 'json')) || [];
+        await env.KV.put('log', JSON.stringify([...prev, { at: new Date().toISOString(), device: id.slice(0, 6), tag: 'test', status: r.status, reason: r.reason || '' }].slice(-50)));
         return json({ ok: r.ok, status: r.status });
       }
       return json({ error: 'Not found' }, 404);
@@ -210,13 +212,20 @@ async function runAlerts(env, scheduledTime) {
   if (!data) return;
   const alerts = dueAlerts(data, state.devices, scheduledTime || Date.now());
   let changed = false;
+  const log = [];
   for (const a of alerts) {
     const dev = state.devices[a.id];
     if (!dev) continue;
     const r = await sendPush(env, dev.sub, a.msg);
+    log.push({ at: new Date(scheduledTime || Date.now()).toISOString(), device: a.id.slice(0, 6), tag: a.msg.tag, status: r.status, reason: r.reason || '' });
     if (r.status === 404 || r.status === 410) { delete state.devices[a.id]; changed = true; } // phone turned them off
   }
   if (changed) await saveState(env, state);
+  if (log.length) {
+    // Keep the last 50 delivery results (Apple's answer for each alert) for troubleshooting.
+    const prev = (await env.KV.get('log', 'json')) || [];
+    await env.KV.put('log', JSON.stringify([...prev, ...log].slice(-50)));
+  }
 }
 
 // ---------- Web Push (RFC 8291 + RFC 8292) ----------
@@ -294,5 +303,7 @@ export async function sendPush(env, sub, msg) {
     },
     body,
   });
-  return { ok: res.ok, status: res.status };
+  let reason = '';
+  if (!res.ok) { try { reason = (await res.text()).slice(0, 200); } catch {} }
+  return { ok: res.ok, status: res.status, reason };
 }
